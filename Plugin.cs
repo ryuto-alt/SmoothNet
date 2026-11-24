@@ -30,11 +30,7 @@ namespace SmoothNet
                 catch (System.Exception e) { Log.LogError($"Patch {t.Name} failed (game update?): {e.Message}"); }
             }
 
-            if (Cfg.CollisionGcFix.Value && !Physics.reuseCollisionCallbacks)
-            {
-                Physics.reuseCollisionCallbacks = true;
-                Log.LogInfo("Physics.reuseCollisionCallbacks -> true");
-            }
+            Gate.Init(); // also applies Physics.reuseCollisionCallbacks only while the mod is active
             Log.LogInfo($"Physics: fixedDeltaTime={Time.fixedDeltaTime} maxDeltaTime={Time.maximumDeltaTime} solverIter={Physics.defaultSolverIterations}");
 
             var go = new GameObject("SmoothNet.Runner");

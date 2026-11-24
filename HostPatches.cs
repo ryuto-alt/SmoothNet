@@ -93,7 +93,7 @@ namespace SmoothNet
             cacheGrabber = g;
             cacheShift = Vector3.zero;
 
-            if (!Cfg.Enabled.Value || !Cfg.CompensateUnmoddedCart.Value) return cacheShift;
+            if (!Gate.On || !Cfg.CompensateUnmoddedCart.Value) return cacheShift;
             if (!PhotonNetwork.InRoom || !PhotonNetwork.IsMasterClient) return cacheShift;
             if (!g || g.isLocal || !g.playerAvatar || g.playerAvatar.isTumbling) return cacheShift;
             var pv = g.playerAvatar.photonView;
@@ -124,7 +124,7 @@ namespace SmoothNet
     {
         private static bool Prefix(PhysGrabCart __instance)
         {
-            if (!Cfg.Enabled.Value || !Cfg.CartSleepFix.Value) return true;
+            if (!Gate.On || !Cfg.CartSleepFix.Value) return true;
             var c = __instance;
 
             if (c.physGrabObjectGrabArea && c.physGrabObjectGrabArea.listOfAllGrabbers.Count > 0) c.CartSteer();
@@ -211,7 +211,7 @@ namespace SmoothNet
 
         public static ContactPoint[] Get(Collision c)
         {
-            if (!Cfg.CollisionGcFix.Value) return c.contacts;
+            if (!Gate.On || !Cfg.CollisionGcFix.Value) return c.contacts;
             if (Fresh || last == null)
             {
                 int n = c.contactCount;

@@ -79,7 +79,7 @@ namespace SmoothNet
             Obj = null;
             Current = Kind.None;
 
-            if (!Cfg.Enabled.Value || !PhotonNetwork.InRoom || PhotonNetwork.IsMasterClient) { Stop("not a client"); return false; }
+            if (!Gate.On || !PhotonNetwork.InRoom || PhotonNetwork.IsMasterClient) { Stop("not a client"); return false; }
 
             var g = PhysGrabber.instance;
             var a = PlayerAvatar.instance;

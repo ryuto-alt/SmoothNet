@@ -9,12 +9,16 @@ namespace SmoothNet
         public static ConfigEntry<string> HudKey;
         public static ConfigEntry<bool> HudOnStart;
         public static ConfigEntry<bool> AutoUpdate;
+        public static ConfigEntry<bool> AskOnStartup;
+        public static ConfigEntry<bool> StartupChoice;
+        public static ConfigEntry<int> ConfigRevision;
 
         // Network
         public static ConfigEntry<int> SendRate;
         public static ConfigEntry<bool> HighRateSync;
         public static ConfigEntry<int> HighRateValue;
         public static ConfigEntry<string> ForceRegion;
+        public static ConfigEntry<bool> AutoBestRegion;
 
         // Client prediction
         public static ConfigEntry<bool> PredictHeld;
@@ -49,17 +53,36 @@ namespace SmoothNet
             AutoUpdate = c.Bind("General", "AutoUpdate", true,
                 "新しいバージョンを自動でダウンロードし、次回起動時に適用する(署名検証あり) / Download signed updates in the background and apply them on the next launch");
 
-            SendRate = c.Bind("Network", "SendRate", 60,
+            AskOnStartup = c.Bind("General", "AskOnStartup", true,
+                "ゲーム起動のたびに、メインメニューでMODをこのプレイで使うか確認する / Ask at every launch (main menu) whether to use SmoothNet this session");
+            StartupChoice = c.Bind("General", "StartupChoice", true,
+                "前回の起動時の選択(確認画面の初期選択) / Last startup choice (pre-selected in the prompt)");
+            ConfigRevision = c.Bind("General", "ConfigRevision", 0,
+                "内部用 / Internal: config migration marker");
+
+            SendRate = c.Bind("Network", "SendRate", 30,
                 new ConfigDescription("パケット送信頻度(バニラ25)。RPCや入力が早く届く。1人だけ変えても安全 / Photon SendRate (vanilla 25). Safe per-player.",
                     new AcceptableValueRange<int>(25, 100)));
             HighRateSync = c.Bind("Network", "HighRateSync", false,
                 "【実験的】全員がSmoothNetを入れている時だけ同期レートを上げる(ホストが自動管理)。実効 約31Hz→約62Hz、通信量約2倍なので4人以下推奨 / EXPERIMENTAL, adaptive: raise SerializationRate when ALL players have SmoothNet and every RTT is low and stable; falls back to vanilla for 30 s+ when someone's RTT climbs (host decides). Effective ~31Hz -> ~62Hz, ~2x traffic.");
-            HighRateValue = c.Bind("Network", "HighRateValue", 40,
-                new ConfigDescription("HighRateSync時の同期レート(PUNは間隔-8msで送るため40で実効約62Hz) / SerializationRate used by HighRateSync (40 = ~62Hz effective)",
+            HighRateValue = c.Bind("Network", "HighRateValue", 30,
+                new ConfigDescription("HighRateSync時の同期レート(PUNは間隔-8msで送るため40で実効約62Hz) / SerializationRate used by HighRateSync (30 = ~40Hz, 40 = ~62Hz effective; default 30 keeps traffic +30% only)",
                     new AcceptableValueRange<int>(30, 40)));
             ForceRegion = c.Bind("Network", "ForceRegion", "Off",
                 new ConfigDescription("ホスト時に地域を強制(Offならメニューで選んだ地域)。日韓なら jp か kr / Force Photon region when hosting. For JP+KR use jp or kr.",
                     new AcceptableValueList<string>("Off", "jp", "kr", "asia", "hk", "us", "usw", "eu")));
+
+            AutoBestRegion = c.Bind("Network", "AutoBestRegion", true,
+                "自分がホストとしてロビーを作る時、選んだ地域よりPingが50ms以上低い地域があればそちらでホストする(他人のロビーに参加する時は変更しない。ForceRegion優先) / When creating a lobby as host, use the lowest-ping Photon region if the selected one is >50 ms slower (never when joining; ForceRegion wins)");
+
+            // One-time migration of the old defaults (SendRate 60, HighRateValue 40) to the more conservative ones.
+            if (ConfigRevision.Value < 1)
+            {
+                if (SendRate.Value == 60) SendRate.Value = 30;
+                if (HighRateValue.Value == 40) HighRateValue.Value = 30;
+                ConfigRevision.Value = 1;
+                c.Save();
+            }
 
             PredictHeld = c.Bind("ClientPrediction", "PredictHeld", true,
                 "掴んだ物を自分の入力で即座に動かして見せる(クライアント時) / Predict objects you hold (as client)");

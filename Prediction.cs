@@ -62,7 +62,7 @@ namespace SmoothNet
             var pgo = (g && g.grabbed) ? g.grabbedPhysGrabObject : null;
             if (pgo != lastRoot) { lastRoot = pgo; rootStart = Time.time; }
 
-            if (!Cfg.Enabled.Value || !PhotonNetwork.InRoom || PhotonNetwork.IsMasterClient) return;
+            if (!Gate.On || !PhotonNetwork.InRoom || PhotonNetwork.IsMasterClient) return;
             if (!pgo || pgo.isPlayer || pgo.isEnemy || pgo.dead || !pgo.rb) return;
             var ptv = pgo.photonTransformView;
             if (!ptv || !ptv.receivedAny) return;
@@ -197,7 +197,7 @@ namespace SmoothNet
         private static bool Prefix(PhotonTransformView __instance)
         {
             var v = __instance;
-            if (PhotonNetwork.IsMasterClient || !PhotonNetwork.InRoom || !Cfg.Enabled.Value) return true;
+            if (PhotonNetwork.IsMasterClient || !PhotonNetwork.InRoom || !Gate.On) return true;
 
             var rb = v.rb;
             if (!rb || v.teleport || !v.receivedAny)

@@ -93,6 +93,7 @@ namespace SmoothNet
                 // IMGUI events come straight from window messages, independent of the Input System setup.
                 Toggle("gui");
             }
+            StartupPrompt.Draw();
             Updater.DrawToast();
             if (!show) return;
             if (style == null)
@@ -123,7 +124,8 @@ namespace SmoothNet
         {
             var sb = new StringBuilder();
             sb.Append($"<b>SmoothNet {Plugin.Version}</b>  <size=11>[{Cfg.HudKey.Value}]</size>");
-            if (!Cfg.Enabled.Value) sb.Append("  " + Col("DISABLED", "#FF6347"));
+            if (!Gate.On) sb.Append("  " + Col(!Cfg.Enabled.Value ? "DISABLED" : Gate.Answered ? "OFF (this session)" : "OFF (waiting for startup choice)", "#FF6347"));
+            else sb.Append("  " + Col("ON", "#7CFC00"));
             sb.Append('\n');
 
             if (Updater.StagedVersion != null)

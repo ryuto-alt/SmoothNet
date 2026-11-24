@@ -21,7 +21,7 @@ namespace SmoothNet
         {
             var v = __instance;
             // Never on the host: host-side enemy AI reads these visual transforms (eye/face targets).
-            if (!Cfg.Enabled.Value || !Cfg.SmoothRemotePlayers.Value || !PhotonNetwork.InRoom || PhotonNetwork.IsMasterClient) { Reset(v); return; }
+            if (!Gate.On || !Cfg.SmoothRemotePlayers.Value || !PhotonNetwork.InRoom || PhotonNetwork.IsMasterClient) { Reset(v); return; }
             if (v.isMenuAvatar || !LevelGenerator.Instance || !LevelGenerator.Instance.Generated) { Reset(v); return; }
             var a = v.playerAvatar;
             if (!a || a.isLocal || a.isDisabled || a.isTumbling || a.clientPhysRiding) { Reset(v); return; }

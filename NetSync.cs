@@ -34,11 +34,14 @@ namespace SmoothNet
         // Host: HighRateSync only while every player's RTT is low and stable; falls back to vanilla for >= 30 s when someone's RTT climbs.
         // Everyone: SendRate falls back to vanilla for 30 s when our own RTT climbs over its baseline or our outgoing queue grows.
         private const float HoldSeconds = 30f;
-        private const float BadSustainSeconds = 3f;
-        private const float RaiseStableSeconds = 5f;
-        private const float RaiseMaxRttMs = 120f;
-        private const float DropRttMs = 150f;
-        private const float DropRiseMs = 60f;
+        private const float BadSustainSeconds = 1f;      // host: drop after ~2 ticks of trouble
+        private const float SendBadSustainSeconds = 2f;  // own SendRate fallback
+        private const float RaiseStableSeconds = 10f;
+        private const float RaiseMaxRttMs = 100f;
+        private const float DropRttMs = 120f;
+        private const float DropRiseMs = 40f;
+        private const float SendDropRiseMs = 60f;
+        private const float MinFpsForAdapt = 30f;        // Photon RTT is inflated by slow frames; don't judge the network then
         private const int QueueLimit = 40;
 
         internal class RttTracker
@@ -47,8 +50,9 @@ namespace SmoothNet
             public int Samples;
             public float BadSince = -1f;
 
-            public void Add(float rtt, float now, float hardMs, float riseMs)
+            public void Add(float rtt, float now, float hardMs, float riseMs, bool ignore = false)
             {
+                if (ignore) { BadSince = -1f; return; } // slow frames inflate Photon's RTT: neither learn from nor judge it
                 Samples++;
                 bool risen = Baseline >= 0f && rtt - Baseline > riseMs;
                 if (Baseline < 0f || rtt < Baseline) Baseline = rtt;
@@ -116,7 +120,7 @@ namespace SmoothNet
 
         private static void PublishRtt(float now)
         {
-            if (!Cfg.Enabled.Value || now < nextRttPublish) return;
+            if (!Gate.On || now < nextRttPublish) return;
             nextRttPublish = now + 2f;
             int ping = Mathf.Max(1, PhotonNetwork.GetPing());
             if (ping == lastPublishedRtt) return;
@@ -128,7 +132,7 @@ namespace SmoothNet
         {
             var peer = PhotonNetwork.NetworkingClient?.LoadBalancingPeer;
             if (peer == null) return;
-            if (!peer.TrafficStatsEnabled) peer.TrafficStatsEnabled = true;
+            if (Gate.On && !peer.TrafficStatsEnabled) peer.TrafficStatsEnabled = true;
             int q = peer.QueuedOutgoingCommands;
             QueueNow = q;
             if (q > queueMaxWindow) queueMaxWindow = q;
@@ -181,7 +185,8 @@ namespace SmoothNet
         {
             int myPing = Mathf.Max(0, PhotonNetwork.GetPing());
             CheckRegion(now, myPing);
-            myTracker.Add(myPing, now, 1e9f, DropRiseMs);
+            bool lowFps = LocalFps > 0f && LocalFps < MinFpsForAdapt;
+            myTracker.Add(myPing, now, 1e9f, SendDropRiseMs, lowFps);
             queueBadCount = QueueNow > QueueLimit ? queueBadCount + 1 : 0;
 
             // SendRate fallback (every player, host included)
@@ -190,10 +195,10 @@ namespace SmoothNet
                 sendFallbackLogged = false;
                 Plugin.Log.LogInfo($"SendRate restored to {Cfg.SendRate.Value}");
             }
-            if (Cfg.Enabled.Value && Cfg.SendRate.Value > VanillaSendRate && now >= SendFallbackUntil)
+            if (Gate.On && Cfg.SendRate.Value > VanillaSendRate && now >= SendFallbackUntil)
             {
                 string why = null;
-                if (myTracker.BadFor(now, BadSustainSeconds)) why = $"own RTT {myPing}ms (baseline {myTracker.Baseline:0}ms)";
+                if (myTracker.BadFor(now, SendBadSustainSeconds)) why = $"own RTT {myPing}ms (baseline {myTracker.Baseline:0}ms)";
                 else if (queueBadCount >= 4) why = $"outgoing queue {QueueNow} commands";
                 if (why != null)
                 {
@@ -213,12 +218,12 @@ namespace SmoothNet
                 int r = RttOf(p);
                 if (r < 0) { allKnown = false; continue; }
                 if (!trackers.TryGetValue(p.ActorNumber, out var tr)) trackers[p.ActorNumber] = tr = new RttTracker();
-                tr.Add(r, now, DropRttMs, DropRiseMs);
+                tr.Add(r, now, DropRttMs, DropRiseMs, p.IsLocal && lowFps);
                 if (r >= RaiseMaxRttMs) allLow = false;
                 if (tr.BadFor(now, BadSustainSeconds)) { anyBad = true; badWho = $"{p.NickName} RTT {r}ms (baseline {tr.Baseline:0}ms)"; }
             }
 
-            bool wanted = Cfg.Enabled.Value && Cfg.HighRateSync.Value && AllModded;
+            bool wanted = Gate.On && Cfg.HighRateSync.Value && AllModded;
             if (!wanted)
             {
                 if (HighRateActive)
@@ -229,6 +234,7 @@ namespace SmoothNet
                 highRateStableSince = -1f;
                 return;
             }
+            if (queueBadCount >= 2 && HighRateActive) { anyBad = true; badWho = $"outgoing queue {QueueNow} commands"; }
             if (anyBad) highRateHoldUntil = Mathf.Max(highRateHoldUntil, now + HoldSeconds);
             if (HighRateActive)
             {
@@ -240,7 +246,7 @@ namespace SmoothNet
                 }
                 return;
             }
-            if (allKnown && allLow && now >= highRateHoldUntil)
+            if (allKnown && allLow && !lowFps && LocalFps >= 45f && now >= highRateHoldUntil)
             {
                 if (highRateStableSince < 0f) highRateStableSince = now;
                 if (now - highRateStableSince >= RaiseStableSeconds)
@@ -276,9 +282,9 @@ namespace SmoothNet
         public static string LocalPresence()
         {
             string flags = "";
-            if (Cfg.Enabled.Value) flags += "e";
-            if (Cfg.Enabled.Value && Cfg.PredictCart.Value) flags += "c";
-            if (Cfg.Enabled.Value && Cfg.PredictCart.Value && Cfg.LocalCartSim.Value) flags += "s";
+            if (Gate.On) flags += "e";
+            if (Gate.On && Cfg.PredictCart.Value) flags += "c";
+            if (Gate.On && Cfg.PredictCart.Value && Cfg.LocalCartSim.Value) flags += "s";
             return Plugin.Version + ";" + flags;
         }
 
@@ -352,7 +358,7 @@ namespace SmoothNet
             var room = PhotonNetwork.CurrentRoom;
             if (PhotonNetwork.IsMasterClient && room != null)
             {
-                int desired = (Cfg.Enabled.Value && Cfg.HighRateSync.Value && AllModded && HighRateActive)
+                int desired = (Gate.On && Cfg.HighRateSync.Value && AllModded && HighRateActive)
                     ? Cfg.HighRateValue.Value : VanillaSerializationRate;
                 int current = room.CustomProperties.TryGetValue(RoomRateKey, out object o) && o is int i ? i : -1;
                 if (current != desired)
@@ -372,7 +378,7 @@ namespace SmoothNet
         public static int TargetSerializationRate()
         {
             var room = PhotonNetwork.CurrentRoom;
-            if (!Cfg.Enabled.Value || room == null) return VanillaSerializationRate;
+            if (!Gate.On || room == null) return VanillaSerializationRate;
             // Only trust the key while the current host runs SmoothNet (stale after host migration otherwise).
             if (!PhotonNetwork.IsMasterClient && !HasMod(PhotonNetwork.MasterClient)) return VanillaSerializationRate;
             if (room.CustomProperties.TryGetValue(RoomRateKey, out object o) && o is int r && r >= 10 && r <= 60)
@@ -383,7 +389,7 @@ namespace SmoothNet
         public static void ApplyRates()
         {
             int ser = TargetSerializationRate();
-            int send = Cfg.Enabled.Value ? Mathf.Max(SendFallbackActive ? VanillaSendRate : Cfg.SendRate.Value, ser) : VanillaSendRate;
+            int send = Gate.On ? Mathf.Max(SendFallbackActive ? VanillaSendRate : Cfg.SendRate.Value, ser) : VanillaSendRate;
             send = Mathf.Max(send, ser);
             // PUN requires SendRate >= SerializationRate, so order matters.
             if (PhotonNetwork.SendRate < ser) PhotonNetwork.SendRate = send;
@@ -435,7 +441,7 @@ namespace SmoothNet
     {
         private static void Prefix(ref string _region)
         {
-            if (!Cfg.Enabled.Value) return;
+            if (!Gate.On) return;
             string f = Cfg.ForceRegion.Value;
             if (string.IsNullOrEmpty(f) || f == "Off") return;
             Plugin.Log.LogInfo($"ForceRegion: '{_region}' -> '{f}'");

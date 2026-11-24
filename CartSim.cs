@@ -53,7 +53,7 @@ namespace SmoothNet
             evalFrame = Time.frameCount;
             Cart = null;
 
-            if (!Cfg.Enabled.Value || !Cfg.LocalCartSim.Value || !Cfg.PredictCart.Value
+            if (!Gate.On || !Cfg.LocalCartSim.Value || !Cfg.PredictCart.Value
                 || !PhotonNetwork.InRoom || PhotonNetwork.IsMasterClient) { Stop("disabled/not client"); return false; }
 
             var g = PhysGrabber.instance;
