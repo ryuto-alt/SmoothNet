@@ -30,6 +30,7 @@ namespace SmoothNet
             try
             {
                 NetSync.Tick();
+                StartupPrompt.Tick();
                 string keyName = Cfg.HudKey.Value;
                 if (keyName != "None")
                 {
@@ -93,7 +94,6 @@ namespace SmoothNet
                 // IMGUI events come straight from window messages, independent of the Input System setup.
                 Toggle("gui");
             }
-            StartupPrompt.Draw();
             Updater.DrawToast();
             if (!show) return;
             if (style == null)

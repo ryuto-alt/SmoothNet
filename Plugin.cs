@@ -10,7 +10,7 @@ namespace SmoothNet
     {
         public const string Guid = "ryuto.smoothnet";
         public const string Name = "SmoothNet";
-        public const string Version = "1.3.0";
+        public const string Version = "1.3.1";
 
         internal static ManualLogSource Log;
         internal static Plugin Instance;

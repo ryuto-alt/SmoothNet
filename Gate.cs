@@ -4,6 +4,7 @@ using HarmonyLib;
 using Photon.Pun;
 using Photon.Realtime;
 using UnityEngine;
+using UnityEngine.Events;
 
 namespace SmoothNet
 {
@@ -38,20 +39,15 @@ namespace SmoothNet
         }
 
         /// <summary>Only in the menu / lobby, never inside a level.</summary>
-        public static void Choose(bool on, bool dontAsk)
+        public static void Choose(bool on)
         {
             if (InLevel()) return;
             Answered = true;
             session = on;
             Cfg.StartupChoice.Value = on;
-            if (dontAsk)
-            {
-                Cfg.AskOnStartup.Value = false;
-                Cfg.Enabled.Value = on;
-            }
             Plugin.Instance.Config.Save();
             ApplyPhysics();
-            Plugin.Log.LogInfo($"Startup choice: {(on ? "ON" : "OFF")} for this session{(dontAsk ? " (won't ask again; Enabled=" + on + ")" : "")}");
+            Plugin.Log.LogInfo($"Startup choice: {(on ? "ON" : "OFF")} for this session");
         }
 
         /// <summary>Physics.reuseCollisionCallbacks is the only global setting we touch; restore it when the mod is off.</summary>
@@ -73,79 +69,83 @@ namespace SmoothNet
         }
     }
 
-    /// <summary>Startup prompt: shown once per launch when the main menu first appears (IMGUI).</summary>
+    /// <summary>
+    /// Startup prompt: shown once per launch when the main menu first appears, using the game's own two-option popup
+    /// (MenuManager.PagePopUpTwoOptions) so it gets the game's cursor and mouse/keyboard/controller input.
+    /// Closing it without a choice (back/escape = the game's option 2) means OFF for the session.
+    /// </summary>
     internal static class StartupPrompt
     {
-        private static bool sel = true;
-        private static bool selInit;
-        private static bool dontAsk;
-        private static GUIStyle title, body, btn, btnSel, small;
-        private static Texture2D bg;
+        private static bool shown;
+        private static float shownAt;
+        private static GameObject holder;
 
         private static bool MenuReady()
         {
-            try { return RunManager.instance && (SemiFunc.IsMainMenu() || SemiFunc.RunIsLobbyMenu()) && !Gate.InLevel(); }
+            try
+            {
+                if (!RunManager.instance || Gate.InLevel() || !(SemiFunc.IsMainMenu() || SemiFunc.RunIsLobbyMenu())) return false;
+                var mm = MenuManager.instance;
+                if (!mm || !mm.currentMenuPage) return false;
+                var page = mm.currentMenuPage;
+                if (page.currentPageState != MenuPage.PageState.Active) return false;
+                if (page.menuPageIndex != MenuPageIndex.Main && page.menuPageIndex != MenuPageIndex.Lobby) return false;
+                return !MenuPageTwoOptions.instance; // no other popup open
+            }
             catch { return false; }
         }
 
-        private static void T(out string t, out string b, out string on, out string off, out string chk, out string hint)
+        private static void T(out string t, out string b, out string on, out string off)
         {
             switch (Application.systemLanguage)
             {
                 case SystemLanguage.Korean:
-                    t = "SmoothNet 네트워크 개선 모드"; b = "렉을 줄이는 실험 기능이에요.\n이번 판에 켤까요?"; on = "켜기"; off = "끄기";
-                    chk = "다음부터 묻지 않기"; hint = "마우스 클릭, 또는 1 = 켜기 / 2 = 끄기 / 3 = 묻지 않기 체크. (끄고 묻지 않기를 고르면 설정 파일 Enabled=true로 되돌릴 수 있어요)"; break;
+                    t = "SmoothNet 네트워크 개선 모드";
+                    b = "렉을 줄이는 실험 기능이에요. 이번 판에 켤까요?\n(매번 묻지 않으려면 설정에서 AskOnStartup을 끄세요)";
+                    on = "켜기"; off = "끄기"; break;
                 case SystemLanguage.Japanese:
-                    t = "SmoothNet ネットワーク改善MOD"; b = "ラグを減らす実験的な機能です。\n今回のプレイで有効にしますか？"; on = "オンにする"; off = "オフにする";
-                    chk = "次回から聞かない"; hint = "マウスでクリック、またはキー 1 = オン / 2 = オフ / 3 = 次回から聞かないを切替。(オフで聞かない場合は設定ファイルの Enabled=true で戻せます)"; break;
+                    t = "SmoothNet ネットワーク改善MOD";
+                    b = "ラグを減らす実験的な機能です。今回のプレイで有効にしますか？\n(毎回聞かれたくない場合は設定の AskOnStartup をオフにしてください)";
+                    on = "オンにする"; off = "オフにする"; break;
                 default:
-                    t = "SmoothNet network improvements"; b = "An experimental lag-reduction mod.\nTurn it on for this session?"; on = "Turn on"; off = "Turn off";
-                    chk = "Don't ask again"; hint = "Click, or keys: 1 = on / 2 = off / 3 = toggle \"don't ask\". (Off + don't ask can be undone with Enabled=true in the config)"; break;
+                    t = "SmoothNet network improvements";
+                    b = "An experimental lag-reduction mod. Turn it on for this session?\n(To stop being asked, set AskOnStartup to false in the config)";
+                    on = "Turn on"; off = "Turn off"; break;
             }
         }
 
-        public static void Draw()
+        /// <summary>Called every frame from Runner.Update.</summary>
+        public static void Tick()
         {
-            if (!Gate.NeedsPrompt || !MenuReady()) return;
-            var ev = Event.current;
-            if (ev == null) return;
-            if (!selInit) { sel = Cfg.StartupChoice.Value; selInit = true; }
-            if (title == null)
+            if (!Gate.NeedsPrompt) return;
+            if (shown)
             {
-                bg = new Texture2D(1, 1);
-                bg.SetPixel(0, 0, new Color(0.05f, 0.05f, 0.08f, 0.94f));
-                bg.Apply();
-                title = new GUIStyle(GUI.skin.label) { fontSize = 22, fontStyle = FontStyle.Bold, alignment = TextAnchor.MiddleCenter, wordWrap = true };
-                body = new GUIStyle(GUI.skin.label) { fontSize = 17, alignment = TextAnchor.MiddleCenter, wordWrap = true };
-                small = new GUIStyle(GUI.skin.label) { fontSize = 12, alignment = TextAnchor.MiddleCenter, wordWrap = true };
-                title.normal.textColor = body.normal.textColor = small.normal.textColor = Color.white;
-                btn = new GUIStyle(GUI.skin.button) { fontSize = 18 };
-                btnSel = new GUIStyle(GUI.skin.button) { fontSize = 18, fontStyle = FontStyle.Bold };
-                btnSel.normal.textColor = btnSel.hover.textColor = new Color(0.5f, 1f, 0.4f);
-            }
-            T(out string t, out string b, out string on, out string off, out string chk, out string hint);
-
-            if (ev.type == EventType.KeyDown)
-            {
-                switch (ev.keyCode)
+                // The popup vanished without either option firing (e.g. scene change): safe default is OFF.
+                if (Time.unscaledTime - shownAt > 0.5f && !MenuPageTwoOptions.instance)
                 {
-                    case KeyCode.Alpha1: case KeyCode.Keypad1: Gate.Choose(true, dontAsk); ev.Use(); return;
-                    case KeyCode.Alpha2: case KeyCode.Keypad2: Gate.Choose(false, dontAsk); ev.Use(); return;
-                    case KeyCode.Alpha3: case KeyCode.Keypad3: dontAsk = !dontAsk; ev.Use(); break;
+                    Plugin.Log.LogInfo("Startup popup closed without a choice -> OFF for this session");
+                    Gate.Choose(false);
+                    if (!Gate.Answered) shown = false; // not in a menu; try again later
                 }
+                return;
             }
+            if (!MenuReady()) return;
 
-            float w = Mathf.Min(560f, Screen.width - 40f), h = 300f;
-            var r = new Rect((Screen.width - w) * 0.5f, (Screen.height - h) * 0.5f, w, h);
-            GUI.depth = -1000;
-            GUI.DrawTexture(r, bg);
-            GUI.Label(new Rect(r.x + 16, r.y + 14, w - 32, 34), t, title);
-            GUI.Label(new Rect(r.x + 16, r.y + 56, w - 32, 70), b, body);
-            float bw = (w - 64f) * 0.5f;
-            if (GUI.Button(new Rect(r.x + 24, r.y + 136, bw, 48), on, sel ? btnSel : btn)) Gate.Choose(true, dontAsk);
-            if (GUI.Button(new Rect(r.x + 40 + bw, r.y + 136, bw, 48), off, !sel ? btnSel : btn)) Gate.Choose(false, dontAsk);
-            dontAsk = GUI.Toggle(new Rect(r.x + 24, r.y + 196, w - 48, 26), dontAsk, " " + chk);
-            GUI.Label(new Rect(r.x + 16, r.y + 232, w - 32, 56), hint, small);
+            if (!holder)
+            {
+                holder = new GameObject("SmoothNet.StartupPopup");
+                holder.hideFlags = HideFlags.HideAndDontSave;
+            }
+            var pop = holder.GetComponent<MenuButtonPopUp>() ?? holder.AddComponent<MenuButtonPopUp>();
+            pop.option1Event = new UnityEvent();
+            pop.option2Event = new UnityEvent();
+            pop.option1Event.AddListener(() => Gate.Choose(true));
+            pop.option2Event.AddListener(() => Gate.Choose(false));
+            T(out string t, out string b, out string on, out string off);
+            MenuManager.instance.PagePopUpTwoOptions(pop, t, null, new Color(1f, 0.55f, 0f), b, null, on, null, off, null, false);
+            shown = true;
+            shownAt = Time.unscaledTime;
+            Plugin.Log.LogInfo("Startup popup shown");
         }
     }
 
