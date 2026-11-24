@@ -1,0 +1,113 @@
+# SmoothNet — R.E.P.O. lag reduction
+
+**日本語 / 한국어 / English**
+
+---
+
+## 🇯🇵 日本語
+
+R.E.P.O.のマルチプレイで、**カートが重い、掴んだ物がワンテンポ遅れる、他の人がカクカク動く**といったラグ感を減らすMODです。
+
+### 何をするの？
+
+| 機能 | 誰に効く | 内容 |
+|---|---|---|
+| 掴んだ物の予測 | クライアント | 掴んだ物が、マウスの動きにすぐ反応します |
+| カートの予測 | クライアント | 押しているカートと中身が、自分の動きにすぐ追従します |
+| 他人が動かす物の先読み | クライアント | 投げられた物や他人が持つ物が、今あるはずの位置に表示されます |
+| 他プレイヤーの描画先読み | クライアント | 他の人の動きが、遅延ぶん補正されて滑らかになります |
+| 送信頻度アップ | 全員 | 操作や合図が早く相手に届きます |
+| MOD未導入者のカート補正 | ホスト | MODを入れていない人が押すカートも、ホスト側で遅延を補正します |
+| カートのスリープ修正 | ホスト | 止まっているカートと中身の物理計算を止めて、ホストを軽くします |
+| GCスパイク削減 | ホスト | 衝突処理のゴミを減らして、ホストのカクつきを抑えます |
+| ネットワークHUD（F8） | 全員 | 地域、Ping、ホストFPS、MOD導入状況を表示します |
+
+**ホストの判定（ダメージ、お金、破損など）は一切変えていません。** クライアント側の予測は「見た目と手応え」を先取りするだけで、正解は常にホストが持っています。予測がずれても、すぐホストの状態に戻ります。
+
+### 導入
+1. BepInExを入れる（r2modman / Thunderstore Mod Manager 推奨）。
+2. `SmoothNet.dll` を `BepInEx/plugins/` に入れる。
+3. **一緒に遊ぶ人も全員入れるのがおすすめです。** クライアント側の機能は、入れた人にだけ効きます。
+
+### おすすめ設定（日韓で遊ぶ場合）
+- **ホストは、ゲームの地域選択で `jp` か `kr` を選んでください。** `asia`（シンガポール）は遠いので避けましょう。
+- 設定は、ゲーム内のREPOConfig（MODSメニュー）か `BepInEx/config/ryuto.smoothnet.cfg` で変えられます。
+- 予測が行き過ぎると感じたら `PredictionStrength` を 0.7 くらいに下げてください。
+
+### 1.2.0 / 自動アップデート
+- 新しいバージョンを**自動でダウンロードし、次にゲームを起動した時に適用**します。ダウンロード完了時にメニューで通知が出ます。
+- アップデートは作者の秘密鍵による**署名つき**です。署名・ハッシュ・DLLの名前とバージョンを確認してから適用し、失敗したら何もしません。起動に2回失敗したら自動で元のバージョンに戻ります。
+- 自動更新には `patchers/SmoothNetUpdater.dll` が必要です（SmoothNet-Setup.exe やThunderstore/r2modmanなら自動で入ります。手動導入なら `BepInEx/patchers/ryuto-SmoothNet/` に置いてください）。
+- 設定 `General.AutoUpdate`（既定ON）でOFFにできます。HUD(F8)にバージョンと、他の人とバージョンが違う時の警告が出ます。
+
+### 1.1.0
+- カートを押す時、自分の画面でカートを直接シミュレーションして即座に反応します（ホストの判定は変わりません）。
+- 新しい設定: `LocalCartSim`（ON/OFF。OFFで1.0.0の動作）、`CartSimCorrection`（ホストのカートへ引き戻す強さ、既定3.0）。
+
+---
+
+## 🇰🇷 한국어
+
+R.E.P.O. 멀티플레이에서 **카트가 무겁게 느껴지거나, 잡은 물건이 늦게 따라오거나, 다른 플레이어가 끊겨 보이는** 렉 체감을 줄여 주는 모드입니다.
+
+### 기능
+
+| 기능 | 대상 | 설명 |
+|---|---|---|
+| 잡은 물건 예측 | 클라이언트 | 잡은 물건이 마우스 움직임에 바로 반응합니다 |
+| 카트 예측 | 클라이언트 | 미는 카트와 안의 물건이 내 움직임을 바로 따라옵니다 |
+| 다른 사람이 움직이는 물건 보정 | 클라이언트 | 던져진 물건이나 다른 사람이 든 물건이 현재 위치에 표시됩니다 |
+| 다른 플레이어 표시 보정 | 클라이언트 | 다른 사람의 움직임이 지연만큼 보정되어 부드러워집니다 |
+| 전송 빈도 증가 | 모두 | 조작과 신호가 더 빨리 전달됩니다 |
+| 모드 없는 플레이어의 카트 보정 | 호스트 | 모드가 없는 사람이 미는 카트도 호스트에서 지연을 보정합니다 |
+| 카트 슬립 버그 수정 | 호스트 | 멈춘 카트와 안의 물건의 물리 연산을 멈춰 호스트 부하를 줄입니다 |
+| GC 스파이크 감소 | 호스트 | 충돌 처리에서 생기는 메모리 낭비를 줄여 끊김을 줄입니다 |
+| 네트워크 HUD (F8) | 모두 | 지역, 핑, 호스트 FPS, 모드 설치 여부를 표시합니다 |
+
+**호스트의 판정(데미지, 돈, 파손 등)은 전혀 바꾸지 않습니다.** 클라이언트 예측은 화면과 조작감만 앞당기며, 정답은 항상 호스트에 있습니다. 예측이 틀려도 바로 호스트 상태로 돌아갑니다.
+
+### 설치
+1. BepInEx를 설치합니다 (r2modman / Thunderstore Mod Manager 추천).
+2. `SmoothNet.dll`을 `BepInEx/plugins/`에 넣습니다.
+3. **같이 하는 사람 모두 설치하는 것을 추천합니다.** 클라이언트 기능은 설치한 사람에게만 적용됩니다.
+
+### 추천 설정 (한일 플레이)
+- **호스트는 지역 선택에서 `jp` 또는 `kr`을 고르세요.** `asia`(싱가포르)는 멀어서 피하는 게 좋습니다.
+- 설정은 게임 내 REPOConfig(MODS 메뉴) 또는 `BepInEx/config/ryuto.smoothnet.cfg`에서 바꿀 수 있습니다.
+- 예측이 너무 앞서 나간다고 느껴지면 `PredictionStrength`를 0.7 정도로 낮추세요.
+
+### 1.2.0 / 자동 업데이트
+- 새 버전을 **자동으로 내려받고, 다음에 게임을 켤 때 적용**합니다. 다운로드가 끝나면 메뉴에 알림이 뜹니다.
+- 업데이트는 제작자의 개인 키로 **서명**되어 있습니다. 서명, 해시, DLL 이름과 버전을 확인한 뒤에만 적용하며, 하나라도 틀리면 아무것도 하지 않습니다. 시작에 2번 실패하면 자동으로 이전 버전으로 되돌립니다.
+- 자동 업데이트에는 `patchers/SmoothNetUpdater.dll`이 필요합니다 (SmoothNet-Setup.exe나 Thunderstore/r2modman이면 자동으로 들어갑니다. 수동 설치라면 `BepInEx/patchers/ryuto-SmoothNet/`에 넣으세요).
+- 설정 `General.AutoUpdate`(기본 ON)로 끌 수 있습니다. HUD(F8)에 버전과, 다른 사람과 버전이 다를 때 경고가 표시됩니다.
+
+### 1.1.0
+- 카트를 밀 때 내 화면에서 카트를 직접 시뮬레이션해서 즉시 반응합니다 (호스트의 판정은 바뀌지 않습니다).
+- 새 설정: `LocalCartSim` (ON/OFF, OFF면 1.0.0 동작), `CartSimCorrection` (호스트 카트 쪽으로 되돌리는 강도, 기본 3.0).
+
+---
+
+## 🇬🇧 English
+
+Reduces perceived lag in R.E.P.O. multiplayer:
+- client-side prediction for held objects and pushed carts (including their contents);
+- velocity extrapolation for objects other players move;
+- latency-compensated remote player rendering;
+- higher packet send rate;
+- host-side cart compensation for players without the mod;
+- a vanilla cart-never-sleeps physics fix;
+- fewer collision GC allocations;
+- a network HUD (F8).
+
+The host stays fully authoritative. Prediction is visual only, re-anchored on every host packet, and never sent back. Install on every player for the full effect. For a Japan + Korea group, the host should pick region `jp` or `kr`.
+
+### 1.2.0 / auto-update
+- New versions are **downloaded in the background and applied on the next game launch**. A toast in the menu tells you when one is ready.
+- Updates are **signed** with the author's private key. The mod verifies the signature, the SHA-256, the assembly name and the version before anything is applied; if any check fails nothing happens. If the new version fails to start twice, the previous version is restored automatically.
+- Auto-update needs `patchers/SmoothNetUpdater.dll` (included by SmoothNet-Setup.exe and by Thunderstore/r2modman; for a manual install put it in `BepInEx/patchers/ryuto-SmoothNet/`).
+- Turn it off with `General.AutoUpdate` (default on). The HUD (F8) shows the version and warns when other players run a different one.
+
+### 1.1.0
+- When you push a cart, it is now simulated locally on your screen so it reacts instantly (the host stays authoritative).
+- New config entries: `LocalCartSim` (on/off; off = 1.0.0 behaviour) and `CartSimCorrection` (strength of the pull toward the host's cart, default 3.0).

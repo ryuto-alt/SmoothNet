@@ -1,0 +1,16 @@
+bin/
+obj/
+dist/
+*.user
+.vs/
+tests/**/bin/
+tests/**/obj/
+TestResults/
+*.pfx
+*key*.xml
+*.snk
+package/SmoothNet.dll
+package/SmoothNetUpdater.dll
+*.dll
+*.exe
+*.log

@@ -1,0 +1,9 @@
+{
+  "name": "SmoothNet",
+  "version_number": "1.2.0",
+  "website_url": "",
+  "description": "Reduces multiplayer lag feel: held-object & cart prediction, smoother remote players, cart sleep fix, network HUD (F8), signed auto-update.",
+  "dependencies": [
+    "BepInEx-BepInExPack-5.4.2100"
+  ]
+}
