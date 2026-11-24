@@ -32,7 +32,7 @@ namespace SmoothNet
     /// </summary>
     internal static class Predictor
     {
-        public enum Mode { None, Held, Cart, CartSim }
+        public enum Mode { None, Held, Cart, CartSim, HeldSim }
 
         private static int frame = -1;
         private static bool valid;
@@ -62,10 +62,16 @@ namespace SmoothNet
             var pgo = (g && g.grabbed) ? g.grabbedPhysGrabObject : null;
             if (pgo != lastRoot) { lastRoot = pgo; rootStart = Time.time; }
 
-            if (!Cfg.Enabled.Value || !PhotonNetwork.InRoom || PhotonNetwork.IsMasterClient || !History.Has) return;
+            if (!Cfg.Enabled.Value || !PhotonNetwork.InRoom || PhotonNetwork.IsMasterClient) return;
             if (!pgo || pgo.isPlayer || pgo.isEnemy || pgo.dead || !pgo.rb) return;
             var ptv = pgo.photonTransformView;
             if (!ptv || !ptv.receivedAny) return;
+
+            // Local held-object simulation drives the body itself; no rigid delta on top.
+            if (HeldSim.IsSimulating(pgo)) { CurrentMode = Mode.HeldSim; LastLag = 0f; return; }
+            // Hinged doors: the client has no joint, a rigid delta would push them to impossible poses (teleport).
+            if (HeldSim.IsLiveHinge(pgo)) return;
+            if (!History.Has) return;
 
             // Local cart simulation: the cart itself is driven by CartSim; the items inside follow it rigidly.
             if (pgo.isCart && pgo.physGrabCart && CartSim.IsSimulating(pgo) && CartSim.ItemDelta(pgo.physGrabCart, out delta))
@@ -178,6 +184,7 @@ namespace SmoothNet
         private class PgoRef { public PhysGrabObject Pgo; public bool Looked; }
 
         private static readonly ConditionalWeakTable<PhotonTransformView, State> states = new ConditionalWeakTable<PhotonTransformView, State>();
+        private static readonly ConditionalWeakTable<PhotonTransformView, object> wasVanillaSnap = new ConditionalWeakTable<PhotonTransformView, object>();
         private static readonly ConditionalWeakTable<PhotonTransformView, PgoRef> pgos = new ConditionalWeakTable<PhotonTransformView, PgoRef>();
 
         private static PhysGrabObject GetPgo(PhotonTransformView v)
@@ -205,9 +212,9 @@ namespace SmoothNet
             Predictor.Compute();
             bool active = Predictor.TryGet(pgo, out var d);
 
-            if (CartSim.IsSimulating(pgo))
+            if (CartSim.IsSimulating(pgo) || HeldSim.IsSimulating(pgo))
             {
-                // CartSim drives this body in FixedUpdate; vanilla follow must stay out of the way.
+                // CartSim / HeldSim drive this body in FixedUpdate; vanilla follow must stay out of the way.
                 var ss = states.GetOrCreateValue(v);
                 ss.WasSim = true;
                 ss.W = 0f;
@@ -260,7 +267,16 @@ namespace SmoothNet
             if (!active && (st == null || st.W <= 0f))
             {
                 if (st != null) st.HasPrev = false;
-                if (Cfg.ExtrapolateOthers.Value && ShouldExtrapolate(pgo, v))
+                if (pgo.grabbedLocal)
+                {
+                    // vanilla follow of something we hold: a jump this big is what the player sees as a teleport
+                    Extrapolated(v, v.overrideExtrapolateTimer > 0f ? v.overrideExtrapolateMaxTime : 0f, out var vp, out _);
+                    float verr = Vector3.Distance(vp, rb.position);
+                    if (verr > 3f && !wasVanillaSnap.TryGetValue(v, out _)) { SnapStats.Report("Vanilla", pgo.name, verr); wasVanillaSnap.Add(v, true); }
+                    else if (verr <= 3f) wasVanillaSnap.Remove(v);
+                }
+                bool heldHinge = pgo.grabbedLocal && HeldSim.IsLiveHinge(pgo); // doors we hold: plain vanilla follow
+                if (Cfg.ExtrapolateOthers.Value && !heldHinge && ShouldExtrapolate(pgo, v))
                     v.OverrideExtrapolate(Cfg.ExtrapolateMaxTime.Value, 0.15f);
                 return true; // vanilla path (with or without built-in extrapolation)
             }
@@ -316,7 +332,7 @@ namespace SmoothNet
             return v.receivedVelocity.sqrMagnitude > 0.3f * 0.3f;
         }
 
-        private static void Extrapolated(PhotonTransformView v, float maxTime, out Vector3 pos, out Quaternion rot)
+        internal static void Extrapolated(PhotonTransformView v, float maxTime, out Vector3 pos, out Quaternion rot)
         {
             pos = v.m_NetworkPosition;
             rot = v.m_NetworkRotation;
@@ -333,6 +349,7 @@ namespace SmoothNet
             Vector3 err = tPos - rb.position;
             if (err.sqrMagnitude > 9f)
             {
+                SnapStats.Report("Drive", v.name, err.magnitude);
                 rb.position = tPos;
                 rb.rotation = tRot;
                 rb.linearVelocity = v.receivedVelocity;

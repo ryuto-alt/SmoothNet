@@ -118,6 +118,13 @@ namespace SmoothNet
             toastShownAt = -1f;
         }
 
+        /// <summary>Queue an arbitrary one-off message on the same toast (shown in menus/lobby, ~12 s).</summary>
+        public static void ShowToast(string text)
+        {
+            toast = toast == null ? text : toast + "\n" + text;
+            toastShownAt = -1f;
+        }
+
         private static bool InLevel()
         {
             try { return SemiFunc.RunIsLevel() || SemiFunc.RunIsArena(); }

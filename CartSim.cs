@@ -232,6 +232,7 @@ namespace SmoothNet
             // Hard failure only: the host cart is far away (teleport, fell, sent elsewhere).
             if (dist > 3f)
             {
+                SnapStats.Report("CartSim", c.name, dist);
                 rb.position = hostPos;
                 rb.rotation = Quaternion.Euler(0f, hostYaw, 0f);
                 rb.linearVelocity = ptv.receivedVelocity;

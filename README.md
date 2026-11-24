@@ -34,6 +34,13 @@ R.E.P.O.のマルチプレイで、**カートが重い、掴んだ物がワン�
 - 設定は、ゲーム内のREPOConfig（MODSメニュー）か `BepInEx/config/ryuto.smoothnet.cfg` で変えられます。
 - 予測が行き過ぎると感じたら `PredictionStrength` を 0.7 くらいに下げてください。
 
+### 1.3.0
+- **掴んだ物とドアが瞬間移動する問題を修正しました。** ドアはクライアント側に蝶番(ジョイント)が無く、予測がありえない位置へ動かしていたのが原因です。ドアはバニラの追従に戻し、予測を一切かけません。
+- 掴んだ物は、自分の画面でバニラと同じ物理（ばね＋回転）をシミュレーションして即座に反応します（自分だけが掴んでいる時。ホストの判定は変わりません）。ホストのパケットで急に位置が飛ぶことがなくなります。
+- 新しい設定: `LocalHeldSim`（ON/OFF。OFFで1.2.0の動作）、`HeldSimCorrection`（ホストの位置へ引き戻す強さ、既定4.0）。
+- **HighRateSync（既定OFFのまま）は自動調整式になりました。** 全員のPingが120ms未満で安定している時だけ上げ、誰かのPingが150ms超、またはベースラインより60ms以上上がって3秒続くと、30秒以上バニラ(25)に戻します。`SendRate` も、自分のPingが上がるか送信キューが溜まると30秒だけ25に戻ります。切り替えはログに記録されます。
+- F8 HUD: 通信量（送信/受信KB/s、パケット/s、送信キュー）、各プレイヤーのPing、瞬間移動(スナップ)の回数と直近の内容を表示します。ホストでPingが高いのにサーバー地域が jp/kr でない場合は、メニューで地域変更を促す通知が出ます（`ForceRegion` の既定は変えていません）。
+
 ### 1.2.0 / 自動アップデート
 - 新しいバージョンを**自動でダウンロードし、次にゲームを起動した時に適用**します。ダウンロード完了時にメニューで通知が出ます。
 - アップデートは作者の秘密鍵による**署名つき**です。署名・ハッシュ・DLLの名前とバージョンを確認してから適用し、失敗したら何もしません。起動に2回失敗したら自動で元のバージョンに戻ります。
@@ -76,6 +83,13 @@ R.E.P.O. 멀티플레이에서 **카트가 무겁게 느껴지거나, 잡은 물
 - 설정은 게임 내 REPOConfig(MODS 메뉴) 또는 `BepInEx/config/ryuto.smoothnet.cfg`에서 바꿀 수 있습니다.
 - 예측이 너무 앞서 나간다고 느껴지면 `PredictionStrength`를 0.7 정도로 낮추세요.
 
+### 1.3.0
+- **들고 있는 물건과 문이 순간이동하던 문제를 수정했습니다.** 문은 클라이언트에 경첩(조인트)이 없는데 예측이 불가능한 위치로 밀어 넣고 있었습니다. 이제 문은 예측 없이 바닐라 추적을 그대로 씁니다.
+- 잡은 물건은 내 화면에서 바닐라와 같은 물리(스프링 + 회전)를 직접 시뮬레이션해 바로 반응합니다 (나 혼자 잡고 있을 때. 호스트의 판정은 바뀌지 않습니다). 호스트 패킷이 올 때마다 위치가 튀는 현상이 사라집니다.
+- 새 설정: `LocalHeldSim` (ON/OFF, OFF면 1.2.0 동작), `HeldSimCorrection` (호스트 위치로 되돌리는 강도, 기본 4.0).
+- **HighRateSync(기본 OFF 그대로)가 자동 조절식이 되었습니다.** 모든 플레이어의 핑이 120ms 미만으로 안정적일 때만 올리고, 누군가의 핑이 150ms를 넘거나 기준치보다 60ms 이상 올라 3초 지속되면 30초 이상 바닐라(25)로 되돌립니다. `SendRate`도 내 핑이 오르거나 송신 큐가 쌓이면 30초 동안 25로 돌아갑니다. 전환은 로그에 기록됩니다.
+- F8 HUD: 트래픽(송신/수신 KB/s, 패킷/s, 송신 큐), 플레이어별 핑, 순간이동(스냅) 횟수와 마지막 내용을 표시합니다. 호스트인데 핑이 높고 서버 지역이 jp/kr이 아니면 지역을 바꾸라는 알림이 뜹니다 (`ForceRegion` 기본값은 그대로).
+
 ### 1.2.0 / 자동 업데이트
 - 새 버전을 **자동으로 내려받고, 다음에 게임을 켤 때 적용**합니다. 다운로드가 끝나면 메뉴에 알림이 뜹니다.
 - 업데이트는 제작자의 개인 키로 **서명**되어 있습니다. 서명, 해시, DLL 이름과 버전을 확인한 뒤에만 적용하며, 하나라도 틀리면 아무것도 하지 않습니다. 시작에 2번 실패하면 자동으로 이전 버전으로 되돌립니다.
@@ -101,6 +115,13 @@ Reduces perceived lag in R.E.P.O. multiplayer:
 - a network HUD (F8).
 
 The host stays fully authoritative. Prediction is visual only, re-anchored on every host packet, and never sent back. Install on every player for the full effect. For a Japan + Korea group, the host should pick region `jp` or `kr`.
+
+### 1.3.0
+- **Fixed held items and doors teleporting.** Doors have no hinge joint on clients, so the old prediction pushed them to impossible poses. Hinged doors now use plain vanilla follow with no prediction at all.
+- Held objects are simulated locally with the vanilla grab physics (spring + camera-relative rotation) while you are the only grabber, so they respond instantly and no longer jump on every host packet. The host stays authoritative.
+- New config: `LocalHeldSim` (on/off; off = 1.2.0 behaviour) and `HeldSimCorrection` (pull toward the host's pose, default 4.0).
+- **HighRateSync (still default off) is now adaptive.** It is raised only while every player's RTT is under 120 ms and stable, and drops back to vanilla 25 for at least 30 s if anyone's RTT exceeds 150 ms or rises 60 ms over its baseline for ~3 s. `SendRate` also falls back to 25 for 30 s when your own RTT climbs or the outgoing queue grows. Transitions are logged.
+- F8 HUD: traffic (KB/s out/in, packets/s, outgoing queue), per-player RTT, and a counter of hard snaps (teleports) with the last one. When hosting with high ping on a region other than jp/kr, a one-time hint toast suggests changing the region (the `ForceRegion` default is unchanged).
 
 ### 1.2.0 / auto-update
 - New versions are **downloaded in the background and applied on the next game launch**. A toast in the menu tells you when one is ready.

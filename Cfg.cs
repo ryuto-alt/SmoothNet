@@ -21,6 +21,8 @@ namespace SmoothNet
         public static ConfigEntry<bool> PredictCart;
         public static ConfigEntry<bool> LocalCartSim;
         public static ConfigEntry<float> CartSimCorrection;
+        public static ConfigEntry<bool> LocalHeldSim;
+        public static ConfigEntry<float> HeldSimCorrection;
         public static ConfigEntry<float> PredictionStrength;
         public static ConfigEntry<float> ExtraLatency;
         public static ConfigEntry<float> MaxPredictionTime;
@@ -51,7 +53,7 @@ namespace SmoothNet
                 new ConfigDescription("パケット送信頻度(バニラ25)。RPCや入力が早く届く。1人だけ変えても安全 / Photon SendRate (vanilla 25). Safe per-player.",
                     new AcceptableValueRange<int>(25, 100)));
             HighRateSync = c.Bind("Network", "HighRateSync", false,
-                "【実験的】全員がSmoothNetを入れている時だけ同期レートを上げる(ホストが自動管理)。実効 約31Hz→約62Hz、通信量約2倍なので4人以下推奨 / EXPERIMENTAL: raise SerializationRate when ALL players have SmoothNet (host decides). Effective ~31Hz -> ~62Hz, ~2x traffic.");
+                "【実験的】全員がSmoothNetを入れている時だけ同期レートを上げる(ホストが自動管理)。実効 約31Hz→約62Hz、通信量約2倍なので4人以下推奨 / EXPERIMENTAL, adaptive: raise SerializationRate when ALL players have SmoothNet and every RTT is low and stable; falls back to vanilla for 30 s+ when someone's RTT climbs (host decides). Effective ~31Hz -> ~62Hz, ~2x traffic.");
             HighRateValue = c.Bind("Network", "HighRateValue", 40,
                 new ConfigDescription("HighRateSync時の同期レート(PUNは間隔-8msで送るため40で実効約62Hz) / SerializationRate used by HighRateSync (40 = ~62Hz effective)",
                     new AcceptableValueRange<int>(30, 40)));
@@ -68,6 +70,11 @@ namespace SmoothNet
             CartSimCorrection = c.Bind("ClientPrediction", "CartSimCorrection", 3.0f,
                 new ConfigDescription("ローカルのカートをホストの位置へ引き戻す強さ。大きいほど正確、小さいほど滑らか / How strongly the local cart is pulled toward the host's cart. Higher = more accurate, lower = smoother",
                     new AcceptableValueRange<float>(0.5f, 10f)));
+            LocalHeldSim = c.Bind("ClientPrediction", "LocalHeldSim", true,
+                "掴んだ物を、自分の画面でバニラと同じ物理(ばね+回転)でシミュレーションして即座に反応させる(クライアント時、自分だけが掴んでいる時)。OFFで1.2.0の挙動 / Simulate the object you hold locally with vanilla grab physics for instant response (as client, sole grabber). Off = 1.2.0 behaviour");
+            HeldSimCorrection = c.Bind("ClientPrediction", "HeldSimCorrection", 4.0f,
+                new ConfigDescription("ローカルの掴んだ物をホストの位置へ引き戻す強さ。大きいほど正確、小さいほど滑らか / How strongly the locally simulated held object is pulled toward the host's. Higher = more accurate, lower = smoother",
+                    new AcceptableValueRange<float>(0.5f, 12f)));
             PredictionStrength = c.Bind("ClientPrediction", "PredictionStrength", 1.0f,
                 new ConfigDescription("予測の強さ。行き過ぎるなら下げる / Prediction strength. Lower if it overshoots",
                     new AcceptableValueRange<float>(0f, 1.5f)));

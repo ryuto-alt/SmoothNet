@@ -17,6 +17,7 @@ namespace SmoothNet
         public const string PlayerKey = "SmoothNet";
         public const string RoomRateKey = "SmoothNet.sr";
         public const string RoomFpsKey = "SmoothNet.fps";
+        public const string RttKey = "SmoothNet.rtt";
 
         public const int VanillaSerializationRate = 25;
         public const int VanillaSendRate = 25;
@@ -28,6 +29,228 @@ namespace SmoothNet
         private static float fpsAccum;
         private static int fpsFrames;
         public static float LocalFps;
+
+        // --- RTT publishing + adaptive rates ---
+        // Host: HighRateSync only while every player's RTT is low and stable; falls back to vanilla for >= 30 s when someone's RTT climbs.
+        // Everyone: SendRate falls back to vanilla for 30 s when our own RTT climbs over its baseline or our outgoing queue grows.
+        private const float HoldSeconds = 30f;
+        private const float BadSustainSeconds = 3f;
+        private const float RaiseStableSeconds = 5f;
+        private const float RaiseMaxRttMs = 120f;
+        private const float DropRttMs = 150f;
+        private const float DropRiseMs = 60f;
+        private const int QueueLimit = 40;
+
+        internal class RttTracker
+        {
+            public float Baseline = -1f;
+            public int Samples;
+            public float BadSince = -1f;
+
+            public void Add(float rtt, float now, float hardMs, float riseMs)
+            {
+                Samples++;
+                bool risen = Baseline >= 0f && rtt - Baseline > riseMs;
+                if (Baseline < 0f || rtt < Baseline) Baseline = rtt;
+                else if (!risen) Baseline += (rtt - Baseline) * 0.005f; // slow upward drift, frozen while in trouble
+                bool bad = Samples >= 20 && (rtt > hardMs || risen);    // ~10 s warm-up
+                if (bad) { if (BadSince < 0f) BadSince = now; } else BadSince = -1f;
+            }
+
+            public bool BadFor(float now, float seconds) => BadSince >= 0f && now - BadSince >= seconds;
+        }
+
+        private static readonly Dictionary<int, RttTracker> trackers = new Dictionary<int, RttTracker>();
+        private static readonly RttTracker myTracker = new RttTracker();
+        private static float nextRttPublish;
+        private static int lastPublishedRtt = -1;
+
+        public static bool HighRateActive;
+        private static float highRateHoldUntil;
+        private static float highRateStableSince = -1f;
+        public static float HighRateHoldRemaining => Mathf.Max(0f, highRateHoldUntil - Time.unscaledTime);
+
+        public static float SendFallbackUntil;
+        private static bool sendFallbackLogged;
+        private static int queueBadCount;
+        public static bool SendFallbackActive => Time.unscaledTime < SendFallbackUntil;
+
+        // traffic stats (local peer)
+        public static float OutKBps, InKBps, OutPktPs;
+        public static int QueueNow, QueueMaxShown;
+        private static int queueMaxWindow;
+        private static float lastTrafficSample;
+        private static long prevOutBytes, prevInBytes, prevOutPackets;
+
+        public static void ResetAdaptive()
+        {
+            trackers.Clear();
+            myTracker.Baseline = -1f; myTracker.Samples = 0; myTracker.BadSince = -1f;
+            HighRateActive = false;
+            highRateHoldUntil = 0f;
+            highRateStableSince = -1f;
+            SendFallbackUntil = 0f;
+            sendFallbackLogged = false;
+            queueBadCount = 0;
+            lastPublishedRtt = -1;
+            lastTrafficSample = 0f;
+        }
+
+        /// <summary>RTT (ms) another player published via SmoothNet, or -1.</summary>
+        public static int ReportedRtt(Player p)
+        {
+            if (p?.CustomProperties != null && p.CustomProperties.TryGetValue(RttKey, out object v) && v is int i && i > 0) return i;
+            return -1;
+        }
+
+        private static int RttOf(Player p)
+        {
+            if (p.IsLocal) return Mathf.Max(0, PhotonNetwork.GetPing());
+            int r = ReportedRtt(p);
+            if (r > 0) return r;
+            if (GameDirector.instance != null)
+                foreach (var a in GameDirector.instance.PlayerList)
+                    if (a && a.photonView && a.photonView.Owner == p) return a.playerPing > 0 ? a.playerPing : -1; // vanilla value, refreshed only every ~6 s
+            return -1;
+        }
+
+        private static void PublishRtt(float now)
+        {
+            if (!Cfg.Enabled.Value || now < nextRttPublish) return;
+            nextRttPublish = now + 2f;
+            int ping = Mathf.Max(1, PhotonNetwork.GetPing());
+            if (ping == lastPublishedRtt) return;
+            lastPublishedRtt = ping;
+            PhotonNetwork.LocalPlayer.SetCustomProperties(new Hashtable { { RttKey, ping } });
+        }
+
+        private static void SampleTraffic(float now)
+        {
+            var peer = PhotonNetwork.NetworkingClient?.LoadBalancingPeer;
+            if (peer == null) return;
+            if (!peer.TrafficStatsEnabled) peer.TrafficStatsEnabled = true;
+            int q = peer.QueuedOutgoingCommands;
+            QueueNow = q;
+            if (q > queueMaxWindow) queueMaxWindow = q;
+            if (now - lastTrafficSample < 1f) return;
+            float dt = now - lastTrafficSample;
+            long ob = peer.TrafficStatsOutgoing.TotalPacketBytes, ib = peer.TrafficStatsIncoming.TotalPacketBytes, op = peer.TrafficStatsOutgoing.TotalPacketCount;
+            if (lastTrafficSample > 0f && dt < 5f && ob >= prevOutBytes && ib >= prevInBytes)
+            {
+                OutKBps = (ob - prevOutBytes) / 1024f / dt;
+                InKBps = (ib - prevInBytes) / 1024f / dt;
+                OutPktPs = (op - prevOutPackets) / dt;
+            }
+            prevOutBytes = ob; prevInBytes = ib; prevOutPackets = op;
+            lastTrafficSample = now;
+            QueueMaxShown = queueMaxWindow;
+            queueMaxWindow = 0;
+        }
+
+        public static string Region()
+        {
+            string region = PhotonNetwork.CloudRegion ?? "?";
+            int slash = region.IndexOf('/');
+            return slash >= 0 ? region.Substring(0, slash) : region;
+        }
+
+        private static float farRegionSince = -1f;
+        private static bool farRegionToastShown;
+
+        private static void CheckRegion(float now, int myPing)
+        {
+            if (farRegionToastShown) return;
+            string region = Region();
+            bool near = region == "jp" || region == "kr" || region == "?" || region == "";
+            if (!PhotonNetwork.IsMasterClient || near || myPing <= 120) { farRegionSince = -1f; return; }
+            if (farRegionSince < 0f) farRegionSince = now;
+            if (now - farRegionSince < 10f) return;
+            farRegionToastShown = true;
+            string msg;
+            switch (Application.systemLanguage)
+            {
+                case SystemLanguage.Korean: msg = $"지금 서버 지역이 {region}이라 핑이 높아요. 메뉴에서 지역을 kr 또는 jp로 바꾸거나, 설정의 ForceRegion을 kr로 하세요."; break;
+                case SystemLanguage.Japanese: msg = $"今のサーバー地域は {region} で、Pingが高くなっています。メニューで地域を kr か jp に変えるか、設定の ForceRegion を kr/jp にしてください。"; break;
+                default: msg = $"Your Photon region is {region} and your ping is high. Pick region kr or jp in the menu, or set ForceRegion to kr/jp in the config."; break;
+            }
+            Plugin.Log.LogInfo($"High ping ({myPing}ms) on region '{region}' while hosting: showing region hint");
+            Updater.ShowToast(msg);
+        }
+
+        private static void AdaptRates(float now, bool host)
+        {
+            int myPing = Mathf.Max(0, PhotonNetwork.GetPing());
+            CheckRegion(now, myPing);
+            myTracker.Add(myPing, now, 1e9f, DropRiseMs);
+            queueBadCount = QueueNow > QueueLimit ? queueBadCount + 1 : 0;
+
+            // SendRate fallback (every player, host included)
+            if (sendFallbackLogged && now >= SendFallbackUntil)
+            {
+                sendFallbackLogged = false;
+                Plugin.Log.LogInfo($"SendRate restored to {Cfg.SendRate.Value}");
+            }
+            if (Cfg.Enabled.Value && Cfg.SendRate.Value > VanillaSendRate && now >= SendFallbackUntil)
+            {
+                string why = null;
+                if (myTracker.BadFor(now, BadSustainSeconds)) why = $"own RTT {myPing}ms (baseline {myTracker.Baseline:0}ms)";
+                else if (queueBadCount >= 4) why = $"outgoing queue {QueueNow} commands";
+                if (why != null)
+                {
+                    SendFallbackUntil = now + HoldSeconds;
+                    sendFallbackLogged = true;
+                    queueBadCount = 0;
+                    Plugin.Log.LogInfo($"SendRate -> {VanillaSendRate} for {HoldSeconds:0}s: {why}");
+                }
+            }
+
+            if (!host) { HighRateActive = false; highRateStableSince = -1f; return; }
+
+            bool allKnown = true, allLow = true, anyBad = false;
+            string badWho = null;
+            foreach (var p in PhotonNetwork.PlayerList)
+            {
+                int r = RttOf(p);
+                if (r < 0) { allKnown = false; continue; }
+                if (!trackers.TryGetValue(p.ActorNumber, out var tr)) trackers[p.ActorNumber] = tr = new RttTracker();
+                tr.Add(r, now, DropRttMs, DropRiseMs);
+                if (r >= RaiseMaxRttMs) allLow = false;
+                if (tr.BadFor(now, BadSustainSeconds)) { anyBad = true; badWho = $"{p.NickName} RTT {r}ms (baseline {tr.Baseline:0}ms)"; }
+            }
+
+            bool wanted = Cfg.Enabled.Value && Cfg.HighRateSync.Value && AllModded;
+            if (!wanted)
+            {
+                if (HighRateActive)
+                {
+                    HighRateActive = false;
+                    Plugin.Log.LogInfo($"HighRateSync off: {(Cfg.HighRateSync.Value ? "not every player has SmoothNet" : "disabled in config")}");
+                }
+                highRateStableSince = -1f;
+                return;
+            }
+            if (anyBad) highRateHoldUntil = Mathf.Max(highRateHoldUntil, now + HoldSeconds);
+            if (HighRateActive)
+            {
+                if (anyBad)
+                {
+                    HighRateActive = false;
+                    highRateStableSince = -1f;
+                    Plugin.Log.LogInfo($"HighRateSync -> vanilla {VanillaSerializationRate} for >= {HoldSeconds:0}s: {badWho}");
+                }
+                return;
+            }
+            if (allKnown && allLow && now >= highRateHoldUntil)
+            {
+                if (highRateStableSince < 0f) highRateStableSince = now;
+                if (now - highRateStableSince >= RaiseStableSeconds)
+                {
+                    HighRateActive = true;
+                    Plugin.Log.LogInfo($"HighRateSync -> {Cfg.HighRateValue.Value} (all RTT < {RaiseMaxRttMs:0}ms and stable)");
+                }
+            }
+            else highRateStableSince = -1f;
+        }
 
         // per-avatar receive timing (age of the last OnPhotonSerializeView in seconds)
         public struct RecvInfo { public float Age; public float LocalTime; }
@@ -110,7 +333,10 @@ namespace SmoothNet
 
             if (!PhotonNetwork.InRoom) { AllModded = false; HostFps = -1; return; }
             if (Time.unscaledTime < nextTick) return;
-            nextTick = Time.unscaledTime + 0.5f;
+            float now = Time.unscaledTime;
+            nextTick = now + 0.5f;
+            SampleTraffic(now);
+            PublishRtt(now);
 
             var me = PhotonNetwork.LocalPlayer;
             string presence = LocalPresence();
@@ -121,11 +347,12 @@ namespace SmoothNet
             foreach (var p in PhotonNetwork.PlayerList)
                 if (!HasMod(p)) { all = false; break; }
             AllModded = all;
+            AdaptRates(now, PhotonNetwork.IsMasterClient);
 
             var room = PhotonNetwork.CurrentRoom;
             if (PhotonNetwork.IsMasterClient && room != null)
             {
-                int desired = (Cfg.Enabled.Value && Cfg.HighRateSync.Value && AllModded)
+                int desired = (Cfg.Enabled.Value && Cfg.HighRateSync.Value && AllModded && HighRateActive)
                     ? Cfg.HighRateValue.Value : VanillaSerializationRate;
                 int current = room.CustomProperties.TryGetValue(RoomRateKey, out object o) && o is int i ? i : -1;
                 if (current != desired)
@@ -156,7 +383,7 @@ namespace SmoothNet
         public static void ApplyRates()
         {
             int ser = TargetSerializationRate();
-            int send = Cfg.Enabled.Value ? Mathf.Max(Cfg.SendRate.Value, ser) : VanillaSendRate;
+            int send = Cfg.Enabled.Value ? Mathf.Max(SendFallbackActive ? VanillaSendRate : Cfg.SendRate.Value, ser) : VanillaSendRate;
             send = Mathf.Max(send, ser);
             // PUN requires SendRate >= SerializationRate, so order matters.
             if (PhotonNetwork.SendRate < ser) PhotonNetwork.SendRate = send;
@@ -183,6 +410,8 @@ namespace SmoothNet
         // VanillaSerializationRate/VanillaSendRate hold those constants.
         private static void Postfix()
         {
+            NetSync.ResetAdaptive();
+            Plugin.Log.LogInfo($"Photon region: {NetSync.Region()} (ping {PhotonNetwork.GetPing()}ms)");
             NetSync.ApplyRates();
             NetSync.AvatarRecv.Clear();
             Plugin.Log.LogInfo($"Rates applied: Send={PhotonNetwork.SendRate} Ser={PhotonNetwork.SerializationRate} (vanilla {NetSync.VanillaSendRate}/{NetSync.VanillaSerializationRate})");

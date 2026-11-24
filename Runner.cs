@@ -135,9 +135,7 @@ namespace SmoothNet
                 return sb.ToString();
             }
 
-            string region = PhotonNetwork.CloudRegion ?? "?";
-            int slash = region.IndexOf('/');
-            if (slash >= 0) region = region.Substring(0, slash);
+            string region = NetSync.Region();
             var proto = PhotonNetwork.NetworkingClient.LoadBalancingPeer.UsedProtocol;
             int myPing = PhotonNetwork.GetPing();
             bool host = PhotonNetwork.IsMasterClient;
@@ -148,7 +146,12 @@ namespace SmoothNet
             sb.Append('\n');
 
             bool high = PhotonNetwork.SerializationRate > NetSync.VanillaSerializationRate;
-            sb.Append($"Rates send {PhotonNetwork.SendRate}/s  sync {PhotonNetwork.SerializationRate}/s  {(high ? Col("[HighRate ON]", "#7CFC00") : "")}\n");
+            sb.Append($"Rates send {PhotonNetwork.SendRate}/s  sync {PhotonNetwork.SerializationRate}/s  {(high ? Col("[HighRate ON]", "#7CFC00") : "")}");
+            if (NetSync.SendFallbackActive) sb.Append("  " + Col($"[SendRate fallback {Mathf.CeilToInt(NetSync.SendFallbackUntil - Time.unscaledTime)}s]", "#FFD700"));
+            if (host && Cfg.HighRateSync.Value && !NetSync.HighRateActive && NetSync.AllModded)
+                sb.Append("  " + Col(NetSync.HighRateHoldRemaining > 0f ? $"[HighRate held {Mathf.CeilToInt(NetSync.HighRateHoldRemaining)}s]" : "[HighRate waiting for stable RTT]", "#FFD700"));
+            sb.Append('\n');
+            sb.Append($"Traffic out {NetSync.OutKBps:0.0} KB/s ({NetSync.OutPktPs:0} pkt/s)  in {NetSync.InKBps:0.0} KB/s  queue {NetSync.QueueNow} (max {NetSync.QueueMaxShown})\n");
 
             if (!host)
             {
@@ -156,15 +159,22 @@ namespace SmoothNet
                 sb.Append($"Prediction <b>{mode}</b>");
                 if (Predictor.CurrentMode == Predictor.Mode.CartSim)
                     sb.Append($"  sim vs host: {CartSim.LastPosError:0.00}m {Mathf.Abs(CartSim.LastYawError):0}deg");
+                else if (Predictor.CurrentMode == Predictor.Mode.HeldSim)
+                    sb.Append($"  sim vs host: {HeldSim.LastPosError:0.00}m {HeldSim.LastRotError:0}deg");
                 else if (Predictor.CurrentMode != Predictor.Mode.None)
                     sb.Append($"  ahead {Ms(Predictor.LastLag)}  err {Predictor.LastError:0.00}m" +
                               (Predictor.CurrentMode == Predictor.Mode.Held ? $"  follow {Predictor.LastFollow:0.0}" : ""));
                 sb.Append($"   est. to host ~{Ms(NetSync.UplinkToHost)}\n");
+                if (HeldSim.Current == HeldSim.Kind.Vanilla) sb.Append("Held door/hinge: vanilla follow (no prediction)\n");
             }
             else
             {
                 sb.Append($"Physics awake {(awake >= 0 ? awake + "/" + totalObjs : "-")}\n");
             }
+
+            if (SnapStats.Count > 0)
+                sb.Append(Col($"Snaps {SnapStats.Count}  last: {SnapStats.LastName} [{SnapStats.LastKind}] {SnapStats.LastError:0.0}m {Mathf.RoundToInt(Time.unscaledTime - SnapStats.LastTime)}s ago\n", "#FFD700"));
+            else sb.Append("Snaps 0\n");
 
             sb.Append("<size=12>Players  (ping / to-host RTT / mod)</size>\n");
             float hostRtt = NetSync.HostRtt;
@@ -176,7 +186,8 @@ namespace SmoothNet
                     if (!a || !a.photonView) continue;
                     var owner = a.photonView.Owner;
                     bool isHost = owner != null && owner.IsMasterClient;
-                    int ping = a.isLocal ? myPing : a.playerPing;
+                    int reported = (!a.isLocal && owner != null) ? NetSync.ReportedRtt(owner) : -1;
+                    int ping = a.isLocal ? myPing : (reported > 0 ? reported : a.playerPing);
                     string toHost = isHost ? "host" : Ms(ping * 0.001f + hostRtt);
                     string ver = NetSync.ModVersion(owner);
                     if (ver == null) missing++;
