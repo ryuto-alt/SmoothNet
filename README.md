@@ -34,6 +34,11 @@ R.E.P.O.のマルチプレイで、**カートが重い、掴んだ物がワン�
 - 設定は、ゲーム内のREPOConfig（MODSメニュー）か `BepInEx/config/ryuto.smoothnet.cfg` で変えられます。
 - 予測が行き過ぎると感じたら `PredictionStrength` を 0.7 くらいに下げてください。
 
+### 1.4.0
+- **アップデートがゲームを1回起動するだけで反映されるようになりました。** ゲーム起動直後（MODの読み込み前）に最大4秒だけ最新版を確認し、新しければその場で署名を検証して適用します。ネットワークが遅い・つながらない場合は待たずに通常どおり起動し、これまでどおりバックグラウンドで取得します。`General.AutoUpdate` をOFFにすると確認しません。
+- バックグラウンドで取得した場合は、メインメニューで「今すぐ再起動して適用しますか？」と聞きます（「再起動する」を押した時だけ、Steam経由で自動的に起動し直します。ロビーやゲーム中には出ません）。
+- アップデーター本体（SmoothNetUpdater.dll）も署名付きで配布し、ゲーム終了後に自動で入れ替えます。1.2.0/1.3.xの人も再インストール不要です。
+
 ### 1.3.1
 - 起動時のオン/オフ選択でマウスカーソルが見えない問題を修正しました。ゲーム本来のメニュー（ポップアップ）に変更したので、マウスでもキーボード/コントローラーでも操作できます。「次回から聞かない」のチェックは廃止し、聞かないようにするには設定の `General.AskOnStartup` をOFFにしてください。戻る/Escはオフ扱いです。
 
@@ -89,6 +94,11 @@ R.E.P.O. 멀티플레이에서 **카트가 무겁게 느껴지거나, 잡은 물
 - 설정은 게임 내 REPOConfig(MODS 메뉴) 또는 `BepInEx/config/ryuto.smoothnet.cfg`에서 바꿀 수 있습니다.
 - 예측이 너무 앞서 나간다고 느껴지면 `PredictionStrength`를 0.7 정도로 낮추세요.
 
+### 1.4.0
+- **업데이트가 게임을 한 번만 켜도 바로 적용돼요.** 게임을 켜자마자(모드 로딩 전) 최대 4초 동안 최신 버전을 확인하고, 새 버전이면 서명을 검증한 뒤 그 자리에서 적용합니다. 네트워크가 느리거나 연결되지 않으면 기다리지 않고 평소처럼 시작하며, 예전처럼 백그라운드에서 받습니다. `General.AutoUpdate`를 끄면 확인하지 않습니다.
+- 백그라운드로 받은 경우에는 메인 메뉴에서 "지금 다시 시작해서 적용할까요?"라고 묻습니다 ("다시 시작"을 눌렀을 때만 Steam으로 자동 재실행합니다. 로비나 게임 중에는 뜨지 않습니다).
+- 업데이트 프로그램(SmoothNetUpdater.dll) 자체도 서명해서 배포하고 게임 종료 후 자동으로 교체합니다. 1.2.0/1.3.x 사용자도 다시 설치할 필요가 없어요.
+
 ### 1.3.1
 - 시작 화면의 켜기/끄기 선택에 마우스 커서가 보이도록 게임 메뉴로 변경했습니다. 마우스와 키보드/컨트롤러 모두 쓸 수 있습니다. "다음부터 묻지 않기" 체크는 없어졌으니, 묻지 않으려면 설정의 `General.AskOnStartup`을 끄세요. 뒤로가기/Esc는 "끄기"로 처리됩니다.
 
@@ -127,6 +137,11 @@ Reduces perceived lag in R.E.P.O. multiplayer:
 - a network HUD (F8).
 
 The host stays fully authoritative. Prediction is visual only, re-anchored on every host packet, and never sent back. Install on every player for the full effect. For a Japan + Korea group, the host should pick region `jp` or `kr`.
+
+### 1.4.0
+- **Updates now apply after a single launch.** Right at startup (before mods load) SmoothNet checks for a newer release for at most 4 seconds; if there is one it is signature-verified and applied on the spot. On a slow or missing connection the game starts normally and the background download works as before. `General.AutoUpdate = false` disables the check.
+- When the update was only downloaded in the background, the main menu asks "Restart now to apply it?" (only the "Restart" button relaunches the game through Steam; never shown in a lobby or in a level).
+- The updater itself (SmoothNetUpdater.dll) is now published signed and swapped automatically after the game exits, so 1.2.0/1.3.x users need no reinstall.
 
 ### 1.3.1
 - The startup on/off choice now uses the game's own popup so the mouse cursor is visible (mouse, keyboard and controller all work). The "don't ask again" checkbox is gone: set `General.AskOnStartup` to false in the config to stop being asked. Back/Esc counts as Off.

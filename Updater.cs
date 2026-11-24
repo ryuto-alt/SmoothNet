@@ -1,6 +1,9 @@
 using System;
 using System.Collections;
 using System.IO;
+using System.Linq;
+using BepInEx;
+using Photon.Pun;
 using UnityEngine;
 using UnityEngine.Networking;
 using SmoothNet.Updating;
@@ -62,6 +65,13 @@ namespace SmoothNet
             if (!UpdateCore.TryParseLatest(System.Text.Encoding.UTF8.GetString(jsonBytes), out info, out err))
             { Plugin.Log.LogWarning("Update check: " + err); yield break; }
 
+            yield return PluginRoutine(dir, info);
+            yield return PatcherRoutine(dir, info);
+        }
+
+        private static IEnumerator PluginRoutine(string dir, LatestInfo info)
+        {
+            string err;
             int? cmp = UpdateCore.CompareVersions(info.Version, Plugin.Version);
             if (cmp != 1) { Plugin.Log.LogInfo($"Update check: up to date ({Plugin.Version})"); yield break; }
             if (info.Version == StagedVersion) { QueueToast(info.Version); yield break; }
@@ -84,6 +94,102 @@ namespace SmoothNet
                 QueueToast(info.Version);
             }
             catch (Exception e) { Plugin.Log.LogWarning("Staging update failed: " + e.Message); }
+        }
+
+        // ---------- patcher self-update ----------
+
+        private static string FindPatcherFile()
+        {
+            try
+            {
+                string root = Paths.PatcherPluginPath;
+                if (string.IsNullOrEmpty(root) || !Directory.Exists(root)) return null;
+                var all = Directory.GetFiles(root, UpdateCore.PatcherDllName, SearchOption.AllDirectories);
+                return all.FirstOrDefault(f => f.IndexOf("ryuto-SmoothNet", StringComparison.OrdinalIgnoreCase) >= 0) ?? all.FirstOrDefault();
+            }
+            catch { return null; }
+        }
+
+        private static IEnumerator PatcherRoutine(string dir, LatestInfo info)
+        {
+            if (info.PatcherVersion == null) yield break;
+            string target = FindPatcherFile();
+            if (target == null) yield break; // no patcher installed: nothing to upgrade
+            string curVer = null;
+            try { var an = System.Reflection.AssemblyName.GetAssemblyName(target); curVer = an.Version.Major + "." + an.Version.Minor + "." + an.Version.Build; }
+            catch { yield break; }
+            if (UpdateCore.CompareVersions(info.PatcherVersion, curVer) != 1) yield break;
+            string sv, ss, st;
+            if (UpdateCore.TryGetStagedPatcher(dir, out sv, out ss, out st) && sv == info.PatcherVersion) yield break;
+
+            byte[] dll = null, sig = null;
+            yield return Get(info.PatcherDll, b => dll = b);
+            if (dll == null) yield break;
+            yield return Get(info.PatcherSig, b => sig = b);
+            if (sig == null) yield break;
+            string err;
+            if (!UpdateCore.VerifyPatcher(dll, sig, info.PatcherVersion, info.PatcherSha256, curVer, UpdateCore.PublicKey(), out err))
+            { Plugin.Log.LogWarning("Patcher " + info.PatcherVersion + " rejected: " + err); yield break; }
+            try
+            {
+                UpdateCore.StagePatcher(dir, dll, sig, info, target);
+                Plugin.Log.LogInfo($"Patcher {info.PatcherVersion} downloaded and verified; it will be installed when the game exits");
+                HookQuit();
+            }
+            catch (Exception e) { Plugin.Log.LogWarning("Staging patcher failed: " + e.Message); }
+        }
+
+        private static bool quitHooked, helperSpawned;
+
+        private static void HookQuit()
+        {
+            if (quitHooked) return;
+            quitHooked = true;
+            Application.quitting += () =>
+            {
+                try { SpawnHelper(false); } catch { }
+            };
+        }
+
+        private static void SpawnHelper(bool relaunch)
+        {
+            if (helperSpawned) return;
+            string dir = PluginDir;
+            if (dir == null) return;
+            if (UpdateCore.SpawnHelper(dir, System.Diagnostics.Process.GetCurrentProcess().Id, relaunch, s => Plugin.Log.LogInfo(s)))
+                helperSpawned = true;
+        }
+
+        // ---------- restart popup (fallback when the patcher could not apply the update during startup) ----------
+
+        private static bool restartAsked;
+
+        /// <summary>Called every frame from Runner.Update.</summary>
+        public static void Tick()
+        {
+            if (restartAsked || StagedVersion == null || Gate.NeedsPrompt) return;
+            if (!NativePopup.CanShow(false)) return;
+            restartAsked = true;
+            string v = StagedVersion, t, b, on, off;
+            switch (Application.systemLanguage)
+            {
+                case SystemLanguage.Korean:
+                    t = "SmoothNet 업데이트"; b = $"SmoothNet {v} 업데이트를 받았어요. 지금 다시 시작해서 적용할까요?"; on = "다시 시작"; off = "나중에"; break;
+                case SystemLanguage.Japanese:
+                    t = "SmoothNet アップデート"; b = $"SmoothNet {v} のアップデートを受け取りました。今すぐ再起動して適用しますか？"; on = "再起動する"; off = "あとで"; break;
+                default:
+                    t = "SmoothNet update"; b = $"SmoothNet {v} has been downloaded. Restart the game now to apply it?"; on = "Restart"; off = "Later"; break;
+            }
+            NativePopup.Show(t, b, on, off, Restart, () => Plugin.Log.LogInfo("Restart popup: later"));
+            Plugin.Log.LogInfo("Restart popup shown for " + v);
+        }
+
+        private static void Restart()
+        {
+            Plugin.Log.LogInfo("Restart popup: restarting the game to apply the update");
+            SpawnHelper(true);
+            if (helperSpawned) Application.Quit();
+            else Plugin.Log.LogWarning("Restart helper could not start; please restart manually");
         }
 
         private static IEnumerator Get(string url, Action<byte[]> done)

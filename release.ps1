@@ -2,7 +2,7 @@
   Builds, signs and publishes a SmoothNet release on GitHub.
   Usage:  pwsh -File release.ps1 -Version 1.2.0 -Notes "changelog text"  [-AllowDirty] [-DryRun]
   Needs: the signing key (tools\New-SigningKey.ps1), gh CLI logged in, a clean + pushed git tree.
-  Assets: SmoothNet.dll, SmoothNet.dll.sig, latest.json, SmoothNet-<ver>.zip (the installer exe is never uploaded).
+  Assets: SmoothNet.dll(+.sig), SmoothNetUpdater.dll(+.sig), latest.json, SmoothNet-<ver>.zip (the installer exe is never uploaded).
 #>
 param(
     [Parameter(Mandatory)][string]$Version,
@@ -60,11 +60,18 @@ $sig = $rsa.SignData($bytes, [Security.Cryptography.HashAlgorithmName]::SHA256, 
 $pub = [Security.Cryptography.RSA]::Create(); $pub.ImportParameters($rsa.ExportParameters($false))
 if (-not $pub.VerifyData($bytes, $sig, [Security.Cryptography.HashAlgorithmName]::SHA256, [Security.Cryptography.RSASignaturePadding]::Pkcs1)) { throw 'self-verification failed' }
 $sha = [BitConverter]::ToString([Security.Cryptography.SHA256]::HashData($bytes)).Replace('-', '').ToLowerInvariant()
+# patcher (SmoothNetUpdater.dll) is signed with the same key so installed plugins can upgrade it
+Copy-Item $updater "$out\SmoothNetUpdater.dll"
+$pbytes = [IO.File]::ReadAllBytes("$out\SmoothNetUpdater.dll")
+$psig = $rsa.SignData($pbytes, [Security.Cryptography.HashAlgorithmName]::SHA256, [Security.Cryptography.RSASignaturePadding]::Pkcs1)
+[IO.File]::WriteAllBytes("$out\SmoothNetUpdater.dll.sig", $psig)
+if (-not $pub.VerifyData($pbytes, $psig, [Security.Cryptography.HashAlgorithmName]::SHA256, [Security.Cryptography.RSASignaturePadding]::Pkcs1)) { throw 'patcher self-verification failed' }
+$psha = [BitConverter]::ToString([Security.Cryptography.SHA256]::HashData($pbytes)).Replace('-', '').ToLowerInvariant()
 $rsa.Dispose()
 
 # 5. latest.json
 $base = "https://github.com/$Repo/releases/download/v$Version"
-$latest = [ordered]@{ version = $Version; dll = "$base/SmoothNet.dll"; sig = "$base/SmoothNet.dll.sig"; sha256 = $sha }
+$latest = [ordered]@{ version = $Version; dll = "$base/SmoothNet.dll"; sig = "$base/SmoothNet.dll.sig"; sha256 = $sha; patcherVersion = $Version; patcherDll = "$base/SmoothNetUpdater.dll"; patcherSig = "$base/SmoothNetUpdater.dll.sig"; patcherSha256 = $psha }
 [IO.File]::WriteAllText("$out\latest.json", ($latest | ConvertTo-Json), (New-Object Text.UTF8Encoding($false)))
 
 # 6. Thunderstore-style zip (mod at root, patcher under patchers/)
@@ -85,7 +92,7 @@ Write-Host "built $out  (sha256 $sha)"
 if ($DryRun) { Write-Host 'dry run: not publishing'; return }
 
 # 7. publish
-$assets = @("$out\SmoothNet.dll", "$out\SmoothNet.dll.sig", "$out\latest.json", $zipPath)
+$assets = @("$out\SmoothNet.dll", "$out\SmoothNet.dll.sig", "$out\latest.json", "$out\SmoothNetUpdater.dll", "$out\SmoothNetUpdater.dll.sig", $zipPath)
 gh release create "v$Version" @assets --repo $Repo --title "SmoothNet $Version" --notes $Notes --target main
 if ($LASTEXITCODE -ne 0) { throw 'gh release create failed' }
 Write-Host "released: https://github.com/$Repo/releases/tag/v$Version"

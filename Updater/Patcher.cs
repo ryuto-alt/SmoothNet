@@ -26,12 +26,37 @@ namespace SmoothNet.Updating
                 log = Logger.CreateLogSource("SmoothNetUpdater");
                 string dir = FindPluginDir();
                 if (dir == null) { log.LogInfo("SmoothNet.dll not found under plugins; nothing to do"); return; }
-                UpdateCore.OnLaunch(dir, UpdateCore.PublicKey(), s => log.LogInfo(s));
+                var pub = UpdateCore.PublicKey();
+                UpdateCore.OnLaunch(dir, pub, s => log.LogInfo(s));
+
+                // Same-launch update: fetch + verify + apply within a hard 4 s budget (the plugin's background download stays the fallback).
+                if (AutoUpdateEnabled())
+                {
+                    var lg = log;
+                    UpdateCore.TryOnlineUpdate(dir, pub, s => lg.LogInfo(s), OnlineBudgetMs,
+                        (url, ms) => UpdateCore.Download(url, ms, 4 * 1024 * 1024), UpdateCore.IsAllowedUrl);
+                }
+                else log.LogInfo("AutoUpdate is off; skipping the online check");
             }
             catch (Exception e)
             {
                 try { (log ?? Logger.CreateLogSource("SmoothNetUpdater")).LogWarning("updater failed: " + e.Message); } catch { }
             }
+        }
+
+        private const int OnlineBudgetMs = 4000;
+
+        /// <summary>Reads General.AutoUpdate straight from the plugin's config file (default true when absent).</summary>
+        private static bool AutoUpdateEnabled()
+        {
+            try
+            {
+                string f = Path.Combine(Paths.ConfigPath, "ryuto.smoothnet.cfg");
+                if (!File.Exists(f)) return true;
+                var m = System.Text.RegularExpressions.Regex.Match(File.ReadAllText(f), @"(?im)^\s*AutoUpdate\s*=\s*(true|false)\s*$");
+                return !m.Success || !string.Equals(m.Groups[1].Value, "false", StringComparison.OrdinalIgnoreCase);
+            }
+            catch { return true; }
         }
 
         private static string FindPluginDir()

@@ -31,6 +31,7 @@ namespace SmoothNet
             {
                 NetSync.Tick();
                 StartupPrompt.Tick();
+                Updater.Tick();
                 string keyName = Cfg.HudKey.Value;
                 if (keyName != "None")
                 {

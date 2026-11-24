@@ -69,6 +69,45 @@ namespace SmoothNet
         }
     }
 
+    /// <summary>Wrapper around the game's own two-option popup (MenuManager.PagePopUpTwoOptions): game cursor and input.</summary>
+    internal static class NativePopup
+    {
+        private static GameObject holder;
+
+        /// <summary>True when the popup can be opened right now. mainOnly: the plain main menu only (not the lobby menu / a room).</summary>
+        public static bool CanShow(bool allowLobbyMenu)
+        {
+            try
+            {
+                if (!RunManager.instance || Gate.InLevel()) return false;
+                bool main = SemiFunc.IsMainMenu(), lobby = SemiFunc.RunIsLobbyMenu();
+                if (allowLobbyMenu ? !(main || lobby) : (!main || lobby || PhotonNetwork.InRoom)) return false;
+                var mm = MenuManager.instance;
+                if (!mm || !mm.currentMenuPage) return false;
+                var page = mm.currentMenuPage;
+                if (page.currentPageState != MenuPage.PageState.Active) return false;
+                if (page.menuPageIndex != MenuPageIndex.Main && !(allowLobbyMenu && page.menuPageIndex == MenuPageIndex.Lobby)) return false;
+                return !MenuPageTwoOptions.instance; // no other popup open
+            }
+            catch { return false; }
+        }
+
+        public static void Show(string header, string body, string option1, string option2, Action on1, Action on2)
+        {
+            if (!holder)
+            {
+                holder = new GameObject("SmoothNet.Popup");
+                holder.hideFlags = HideFlags.HideAndDontSave;
+            }
+            var pop = holder.GetComponent<MenuButtonPopUp>() ?? holder.AddComponent<MenuButtonPopUp>();
+            pop.option1Event = new UnityEvent();
+            pop.option2Event = new UnityEvent();
+            pop.option1Event.AddListener(() => on1());
+            pop.option2Event.AddListener(() => on2());
+            MenuManager.instance.PagePopUpTwoOptions(pop, header, null, new Color(1f, 0.55f, 0f), body, null, option1, null, option2, null, false);
+        }
+    }
+
     /// <summary>
     /// Startup prompt: shown once per launch when the main menu first appears, using the game's own two-option popup
     /// (MenuManager.PagePopUpTwoOptions) so it gets the game's cursor and mouse/keyboard/controller input.
@@ -78,22 +117,8 @@ namespace SmoothNet
     {
         private static bool shown;
         private static float shownAt;
-        private static GameObject holder;
 
-        private static bool MenuReady()
-        {
-            try
-            {
-                if (!RunManager.instance || Gate.InLevel() || !(SemiFunc.IsMainMenu() || SemiFunc.RunIsLobbyMenu())) return false;
-                var mm = MenuManager.instance;
-                if (!mm || !mm.currentMenuPage) return false;
-                var page = mm.currentMenuPage;
-                if (page.currentPageState != MenuPage.PageState.Active) return false;
-                if (page.menuPageIndex != MenuPageIndex.Main && page.menuPageIndex != MenuPageIndex.Lobby) return false;
-                return !MenuPageTwoOptions.instance; // no other popup open
-            }
-            catch { return false; }
-        }
+        private static bool MenuReady() { return NativePopup.CanShow(true); }
 
         private static void T(out string t, out string b, out string on, out string off)
         {
@@ -131,18 +156,8 @@ namespace SmoothNet
             }
             if (!MenuReady()) return;
 
-            if (!holder)
-            {
-                holder = new GameObject("SmoothNet.StartupPopup");
-                holder.hideFlags = HideFlags.HideAndDontSave;
-            }
-            var pop = holder.GetComponent<MenuButtonPopUp>() ?? holder.AddComponent<MenuButtonPopUp>();
-            pop.option1Event = new UnityEvent();
-            pop.option2Event = new UnityEvent();
-            pop.option1Event.AddListener(() => Gate.Choose(true));
-            pop.option2Event.AddListener(() => Gate.Choose(false));
             T(out string t, out string b, out string on, out string off);
-            MenuManager.instance.PagePopUpTwoOptions(pop, t, null, new Color(1f, 0.55f, 0f), b, null, on, null, off, null, false);
+            NativePopup.Show(t, b, on, off, () => Gate.Choose(true), () => Gate.Choose(false));
             shown = true;
             shownAt = Time.unscaledTime;
             Plugin.Log.LogInfo("Startup popup shown");

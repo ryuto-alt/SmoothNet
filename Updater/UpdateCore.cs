@@ -1,5 +1,8 @@
 // Unity-free update core. Compiled into the plugin, the preloader patcher and the test harness (netstandard2.0 compatible).
 using System;
+using System.Diagnostics;
+using System.Net;
+using System.Threading;
 using System.Globalization;
 using System.IO;
 using System.Reflection;
@@ -12,6 +15,8 @@ namespace SmoothNet.Updating
     internal sealed class LatestInfo
     {
         public string Version, Dll, Sig, Sha256;
+        // optional: the signed preloader patcher (SmoothNetUpdater.dll) published with the same release
+        public string PatcherVersion, PatcherDll, PatcherSig, PatcherSha256;
     }
 
     internal static class UpdateCore
@@ -20,6 +25,8 @@ namespace SmoothNet.Updating
         public const string LatestUrl = "https://github.com/" + Repo + "/releases/latest/download/latest.json";
         public const string AssemblyNameExpected = "SmoothNet";
         public const string DllName = "SmoothNet.dll";
+        public const string PatcherAssemblyName = "SmoothNetUpdater";
+        public const string PatcherDllName = "SmoothNetUpdater.dll";
         public const string UpdateDirName = ".update";
         public const int MaxFailedLaunches = 2;
 
@@ -35,8 +42,9 @@ namespace SmoothNet.Updating
             return m.Success ? m.Groups[1].Value.Replace("\\/", "/").Replace("\\\\", "\\") : null;
         }
 
-        public static bool TryParseLatest(string json, out LatestInfo info, out string error)
+        public static bool TryParseLatest(string json, out LatestInfo info, out string error, Func<string, bool> allowUrl = null)
         {
+            if (allowUrl == null) allowUrl = IsAllowedUrl;
             info = null; error = null;
             var li = new LatestInfo
             {
@@ -49,8 +57,14 @@ namespace SmoothNet.Updating
             { error = "latest.json is missing fields"; return false; }
             System.Version dummy; string pre;
             if (!TryParseSemver(li.Version, out dummy, out pre)) { error = "bad version: " + li.Version; return false; }
-            if (!IsAllowedUrl(li.Dll) || !IsAllowedUrl(li.Sig)) { error = "download URL not allowed"; return false; }
+            if (!allowUrl(li.Dll) || !allowUrl(li.Sig)) { error = "download URL not allowed"; return false; }
             if (!Regex.IsMatch(li.Sha256, "^[0-9a-fA-F]{64}$")) { error = "bad sha256"; return false; }
+            // optional patcher block: only kept when complete and valid (never makes the plugin update fail)
+            string pv = JsonString(json, "patcherVersion"), pd = JsonString(json, "patcherDll"), ps = JsonString(json, "patcherSig"), ph = JsonString(json, "patcherSha256");
+            System.Version pdummy; string ppre;
+            if (pv != null && pd != null && ps != null && ph != null && TryParseSemver(pv, out pdummy, out ppre)
+                && allowUrl(pd) && allowUrl(ps) && Regex.IsMatch(ph, "^[0-9a-fA-F]{64}$"))
+            { li.PatcherVersion = pv; li.PatcherDll = pd; li.PatcherSig = ps; li.PatcherSha256 = ph; }
             info = li;
             return true;
         }
@@ -149,13 +163,24 @@ namespace SmoothNet.Updating
         /// <summary>Full verification of a downloaded/staged DLL. currentVersion may be null (no newer-than check).</summary>
         public static bool VerifyUpdate(byte[] dll, byte[] sig, string expectedVersion, string expectedSha256, string currentVersion, RSAParameters pub, out string error)
         {
+            return VerifyAssembly(dll, sig, AssemblyNameExpected, expectedVersion, expectedSha256, currentVersion, pub, out error);
+        }
+
+        /// <summary>Same checks for the patcher DLL (assembly name SmoothNetUpdater).</summary>
+        public static bool VerifyPatcher(byte[] dll, byte[] sig, string expectedVersion, string expectedSha256, string currentVersion, RSAParameters pub, out string error)
+        {
+            return VerifyAssembly(dll, sig, PatcherAssemblyName, expectedVersion, expectedSha256, currentVersion, pub, out error);
+        }
+
+        private static bool VerifyAssembly(byte[] dll, byte[] sig, string expectedName, string expectedVersion, string expectedSha256, string currentVersion, RSAParameters pub, out string error)
+        {
             error = null;
             if (dll == null || dll.Length < 1024 || sig == null || sig.Length == 0) { error = "empty download"; return false; }
             if (expectedSha256 != null && !string.Equals(Sha256Hex(dll), expectedSha256, StringComparison.OrdinalIgnoreCase)) { error = "sha256 mismatch"; return false; }
             if (!VerifySignature(dll, sig, pub)) { error = "signature invalid"; return false; }
             string name, ver;
             if (!TryGetIdentity(dll, out name, out ver)) { error = "not a .NET assembly"; return false; }
-            if (name != AssemblyNameExpected) { error = "unexpected assembly name " + name; return false; }
+            if (name != expectedName) { error = "unexpected assembly name " + name; return false; }
             if (CompareVersions(ver, expectedVersion) != 0) { error = "assembly version " + ver + " != " + expectedVersion; return false; }
             if (currentVersion != null && CompareVersions(expectedVersion, currentVersion) != 1) { error = "not newer than " + currentVersion; return false; }
             return true;
@@ -285,6 +310,172 @@ namespace SmoothNet.Updating
             File.WriteAllText(Path.Combine(d, "applied.json"), "{\"version\":\"" + ver + "\",\"launchesWithoutBoot\":0}");
             DiscardPending(d);
             log("applied SmoothNet " + ver + " (was " + (curVer ?? "none") + ")");
+        }
+
+        // ---------- patcher self-update (staged by the plugin, moved by a helper after the game exits) ----------
+
+        public static string StagedPatcherPath(string pluginDir) { return Path.Combine(UpdateDir(pluginDir), PatcherDllName + ".pending"); }
+
+        public static void StagePatcher(string pluginDir, byte[] dll, byte[] sig, LatestInfo info, string targetPath)
+        {
+            string d = UpdateDir(pluginDir);
+            Directory.CreateDirectory(d);
+            File.WriteAllBytes(StagedPatcherPath(pluginDir), dll);
+            File.WriteAllBytes(Path.Combine(d, PatcherDllName + ".sig"), sig);
+            File.WriteAllText(Path.Combine(d, "patcher-pending.json"),
+                "{\"version\":\"" + info.PatcherVersion + "\",\"sha256\":\"" + info.PatcherSha256.ToLowerInvariant() + "\",\"target\":\"" + targetPath.Replace("\\", "\\\\") + "\"}");
+        }
+
+        /// <summary>Returns the staged patcher's version, sha256 and target path, or false when nothing valid is staged.</summary>
+        public static bool TryGetStagedPatcher(string pluginDir, out string version, out string sha256, out string target)
+        {
+            version = sha256 = target = null;
+            try
+            {
+                string j = File.ReadAllText(Path.Combine(UpdateDir(pluginDir), "patcher-pending.json"));
+                version = JsonString(j, "version"); sha256 = JsonString(j, "sha256"); target = JsonString(j, "target");
+                return version != null && sha256 != null && target != null && File.Exists(StagedPatcherPath(pluginDir));
+            }
+            catch { return false; }
+        }
+
+        /// <summary>
+        /// Hidden helper (Windows PowerShell): waits for the game process to exit, then (1) moves a staged patcher DLL into place
+        /// after re-checking its sha256 (keeps .bak), and (2) optionally relaunches the game through Steam.
+        /// </summary>
+        public const string HelperScript = @"param([int]$GamePid, [string]$Staged, [string]$Target, [string]$Sha, [string]$Relaunch)
+$ErrorActionPreference = 'SilentlyContinue'
+try { $p = Get-Process -Id $GamePid; if ($p) { [void]$p.WaitForExit(180000) } } catch { }
+if ($Staged -and $Target -and (Test-Path -LiteralPath $Staged)) {
+  $h = ([BitConverter]::ToString([Security.Cryptography.SHA256]::Create().ComputeHash([IO.File]::ReadAllBytes($Staged))) -replace '-', '').ToLowerInvariant()
+  if ($h -eq $Sha.ToLowerInvariant()) {
+    for ($i = 0; $i -lt 30; $i++) {
+      try {
+        if (Test-Path -LiteralPath $Target) { Copy-Item -LiteralPath $Target -Destination ($Target + '.bak') -Force }
+        Copy-Item -LiteralPath $Staged -Destination ($Target + '.new') -Force
+        Move-Item -LiteralPath ($Target + '.new') -Destination $Target -Force -ErrorAction Stop
+        Remove-Item -LiteralPath $Staged -Force
+        break
+      } catch { Start-Sleep -Milliseconds 500 }
+    }
+  } else { Remove-Item -LiteralPath $Staged -Force }
+}
+if ($Relaunch -eq '1') { Start-Process 'steam://rungameid/3241660' }
+";
+
+        /// <summary>Spawns the hidden helper. Returns false (and logs) on failure; never throws.</summary>
+        public static bool SpawnHelper(string pluginDir, int gamePid, bool relaunch, Action<string> log)
+        {
+            try
+            {
+                string d = UpdateDir(pluginDir);
+                Directory.CreateDirectory(d);
+                string ver, sha, target;
+                bool hasPatcher = TryGetStagedPatcher(pluginDir, out ver, out sha, out target);
+                if (!hasPatcher && !relaunch) return false;
+                string script = Path.Combine(d, "apply-helper.ps1");
+                File.WriteAllText(script, HelperScript, new UTF8Encoding(true));
+                var psi = new ProcessStartInfo
+                {
+                    FileName = "powershell.exe",
+                    Arguments = "-NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File " + Q(script) + " -GamePid " + gamePid
+                        + " -Staged " + Q(hasPatcher ? StagedPatcherPath(pluginDir) : "") + " -Target " + Q(hasPatcher ? target : "")
+                        + " -Sha " + Q(hasPatcher ? sha : "") + " -Relaunch " + (relaunch ? "1" : "0"),
+                    UseShellExecute = false,
+                    CreateNoWindow = true,
+                    WindowStyle = ProcessWindowStyle.Hidden,
+                };
+                Process.Start(psi);
+                log("helper spawned (patcher " + (hasPatcher ? ver : "none") + ", relaunch=" + relaunch + ")");
+                return true;
+            }
+            catch (Exception e) { log("helper failed: " + e.Message); return false; }
+        }
+
+        private static string Q(string s) { return "\"" + (s ?? "").Replace("\"", "") + "\""; }
+
+        // ---------- same-launch online update (patcher side) ----------
+
+        /// <summary>Plain HTTPS GET with a hard per-call timeout. Returns null on any failure.</summary>
+        public static byte[] Download(string url, int timeoutMs, int maxBytes)
+        {
+            if (timeoutMs <= 0) return null;
+            try
+            {
+                try { ServicePointManager.SecurityProtocol |= (SecurityProtocolType)3072; } catch { } // Tls12
+                var req = (HttpWebRequest)WebRequest.Create(url);
+                req.Timeout = timeoutMs;
+                req.ReadWriteTimeout = timeoutMs;
+                req.UserAgent = "SmoothNet-Patcher";
+                req.AllowAutoRedirect = true;
+                var sw = Stopwatch.StartNew();
+                using (var resp = (HttpWebResponse)req.GetResponse())
+                using (var st = resp.GetResponseStream())
+                using (var ms = new MemoryStream())
+                {
+                    var buf = new byte[16384];
+                    int n;
+                    while ((n = st.Read(buf, 0, buf.Length)) > 0)
+                    {
+                        ms.Write(buf, 0, n);
+                        if (ms.Length > maxBytes || sw.ElapsedMilliseconds > timeoutMs) return null;
+                    }
+                    return ms.Length == 0 ? null : ms.ToArray();
+                }
+            }
+            catch { return null; }
+        }
+
+        /// <summary>
+        /// Synchronous check-download-verify-apply with a hard total budget. Runs on a worker thread so even a hung DNS lookup
+        /// cannot hold the game longer than budgetMs; a late result is discarded. Every failure is logged and swallowed.
+        /// </summary>
+        public static void TryOnlineUpdate(string pluginDir, RSAParameters pub, Action<string> log, int budgetMs, Func<string, int, byte[]> download, Func<string, bool> allowUrl)
+        {
+            var gate = new object();
+            bool abandoned = false;
+            var sw = Stopwatch.StartNew();
+            var t = new Thread(() =>
+            {
+                try { OnlineWorker(pluginDir, pub, log, budgetMs, sw, download, allowUrl, gate, () => abandoned); }
+                catch (Exception e) { log("online update failed: " + e.Message); }
+            }) { IsBackground = true, Name = "SmoothNetOnlineUpdate" };
+            t.Start();
+            if (!t.Join(budgetMs + 300))
+            {
+                lock (gate) { abandoned = true; }
+                log("online update: budget of " + budgetMs + " ms exceeded; continuing (the plugin will retry in the background)");
+            }
+        }
+
+        private static void OnlineWorker(string pluginDir, RSAParameters pub, Action<string> log, int budgetMs, Stopwatch sw, Func<string, int, byte[]> download, Func<string, bool> allowUrl, object gate, Func<bool> isAbandoned)
+        {
+            Func<int> left = () => budgetMs - (int)sw.ElapsedMilliseconds;
+            string d = UpdateDir(pluginDir);
+            if (File.Exists(Path.Combine(d, "applied.json"))) { log("online update: previous update not confirmed yet; skipping"); return; }
+            string cur = Path.Combine(pluginDir, DllName);
+            string curVer = null;
+            if (File.Exists(cur)) { string n, v; if (TryGetIdentity(File.ReadAllBytes(cur), out n, out v)) curVer = v; }
+            if (curVer == null) { log("online update: installed SmoothNet.dll unreadable; skipping"); return; }
+
+            var jb = download(LatestUrl, left());
+            if (jb == null) { log("online update: latest.json not reachable (" + sw.ElapsedMilliseconds + " ms)"); return; }
+            LatestInfo info; string err;
+            if (!TryParseLatest(Encoding.UTF8.GetString(jb), out info, out err, allowUrl)) { log("online update: " + err); return; }
+            if (CompareVersions(info.Version, curVer) != 1) { log("online update: up to date (" + curVer + ")"); return; }
+            if (IsRejected(pluginDir, info.Version)) { log("online update: " + info.Version + " was rolled back before; skipping"); return; }
+
+            var dll = download(info.Dll, left());
+            var sig = dll == null ? null : download(info.Sig, left());
+            if (dll == null || sig == null) { log("online update: download failed/timed out"); return; }
+            if (!VerifyUpdate(dll, sig, info.Version, info.Sha256, curVer, pub, out err)) { log("online update: " + info.Version + " rejected: " + err); return; }
+
+            lock (gate)
+            {
+                if (isAbandoned()) { log("online update: too late, discarded"); return; }
+                Stage(pluginDir, dll, sig, info);
+                ApplyPending(pluginDir, pub, log);
+            }
         }
 
         private static void DiscardPending(string d)
